@@ -14,6 +14,22 @@
 DHT dht(DHTPIN, DHTTYPE);
 SoftwareSerial RS485(2, 3); // RX, TX для Max485
 
+const String DEVICE_ID = "ROOM_1"; // Унікальний ID пристрою
+
+// Функція для визначення рівня CO у ppm
+float getCOppm(int sensorValue) {
+  float voltage = (sensorValue / 1023.0) * 5.0;
+  float CO_ppm = pow((voltage / 5.0), -1.5) * 100; // Калібрувальна функція для CO
+  return CO_ppm;
+}
+
+// Функція для визначення рівня CH₄ у ppm
+float getCH4ppm(int sensorValue) {
+  float voltage = (sensorValue / 1023.0) * 5.0;
+  float CH4_ppm = pow((voltage / 5.0), -1.8) * 80; // Калібрувальна функція для CH₄
+  return CH4_ppm;
+}
+
 bool checkDHT22() {
   float testTemp = dht.readTemperature();
   float testHum = dht.readHumidity();
@@ -40,19 +56,29 @@ void setup() {
   pinMode(RE_DE, OUTPUT);
   digitalWrite(RE_DE, LOW); // Режим прийому за замовчуванням
 
+  Serial.println("🔍 Перевірка підключення датчиків...");
+
   // Перевірка підключення датчиків
   bool dhtStatus = checkDHT22();
   bool pirStatus = checkHC_SR501();
   bool mq9Status = checkMQ9();
 
   if (!dhtStatus) {
-    Serial.println("Помилка: Датчик DHT22 не підключено або не відповідає!");
+    Serial.println("❌ Датчик DHT22 НЕ підключено або не відповідає!");
+  } else {
+    Serial.println("✅ Датчик DHT22 успішно підключений.");
   }
+
   if (!pirStatus) {
-    Serial.println("Помилка: Датчик HC-SR501 не підключено або не відповідає!");
+    Serial.println("❌ Датчик HC-SR501 НЕ підключено або не відповідає!");
+  } else {
+    Serial.println("✅ Датчик HC-SR501 успішно підключений.");
   }
+
   if (!mq9Status) {
-    Serial.println("Помилка: Датчик MQ-9 не підключено або не відповідає!");
+    Serial.println("❌ Датчик MQ-9 НЕ підключено або не відповідає!");
+  } else {
+    Serial.println("✅ Датчик MQ-9 успішно підключений.");
   }
 }
 
@@ -65,17 +91,19 @@ void loop() {
   bool motionDetected = digitalRead(PIRPIN);
 
   // Зчитування даних з MQ-9
-  int gasAnalog = analogRead(MQ9Analog);
+  int sensorValue = analogRead(MQ9Analog);
+  float CO_ppm = getCOppm(sensorValue);
+  float CH4_ppm = getCH4ppm(sensorValue);
 
-  // Формування рядка даних для передачі
-  String data = String("Температура: ") + temperature +
+  // Формування рядка даних для передачі (додаємо ID)
+  String data = DEVICE_ID + " / Температура: " + temperature +
                 " / Вологість: " + humidity +
                 " / Рух: " + (motionDetected ? "Так" : "Ні") +
-                " / CO: " + gasAnalog +
-                " / CH₄: " + gasAnalog;
+                " / CO: " + CO_ppm + " ppm" +
+                " / CH₄: " + CH4_ppm + " ppm";
 
-  
-  Serial.println(data);// Вивід даних у Serial для перевірки
+  Serial.println("📊 Поточні показники:");
+  Serial.println(data);
 
   // Передача даних через RS485
   digitalWrite(RE_DE, HIGH);
