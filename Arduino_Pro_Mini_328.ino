@@ -1,32 +1,32 @@
 #include <SoftwareSerial.h>
 #include <DHT.h>
 
-#define DHTPIN 10       // Підключення DATA DHT22 до D10
-#define DHTTYPE DHT22   // Тип датчика DHT22
+#define DHTPIN 10       // Connect DATA of DHT22 to D10
+#define DHTTYPE DHT22   // Sensor type DHT22
 
-#define PIRPIN 11       // Підключення OUT HC-SR501 до D11
+#define PIRPIN 11       // Connect OUT of HC-SR501 to D11
 
-#define MQ9Analog A0    // Аналоговий вихід MQ-9 до A0
-#define MQ9Digital 12   // Цифровий вихід MQ-9 до D12
+#define MQ9Analog A0    // Analog output of MQ-9 to A0
+#define MQ9Digital 12   // Digital output of MQ-9 to D12
 
-#define RE_DE 13        // Контроль RE та DE на Max485
+#define RE_DE 13        // Control RE and DE on Max485
 
 DHT dht(DHTPIN, DHTTYPE);
-SoftwareSerial RS485(2, 3); // RX, TX для Max485
+SoftwareSerial RS485(2, 3); // RX, TX for Max485
 
-const String DEVICE_ID = "ROOM_1"; // Унікальний ID пристрою
+const String DEVICE_ID = "ROOM_1"; // Unique device ID
 
-// Функція для визначення рівня CO у ppm
+// Function to determine CO level in ppm
 float getCOppm(int sensorValue) {
   float voltage = (sensorValue / 1023.0) * 5.0;
-  float CO_ppm = pow((voltage / 5.0), -1.5) * 100; // Калібрувальна функція для CO
+  float CO_ppm = pow((voltage / 5.0), -1.5) * 100; // Calibration function for CO
   return CO_ppm;
 }
 
-// Функція для визначення рівня CH₄ у ppm
+// Function to determine CH₄ level in ppm
 float getCH4ppm(int sensorValue) {
   float voltage = (sensorValue / 1023.0) * 5.0;
-  float CH4_ppm = pow((voltage / 5.0), -1.8) * 80; // Калібрувальна функція для CH₄
+  float CH4_ppm = pow((voltage / 5.0), -1.8) * 80; // Calibration function for CH₄
   return CH4_ppm;
 }
 
@@ -54,63 +54,63 @@ void setup() {
   pinMode(PIRPIN, INPUT);
   pinMode(MQ9Digital, INPUT);
   pinMode(RE_DE, OUTPUT);
-  digitalWrite(RE_DE, LOW); // Режим прийому за замовчуванням
+  digitalWrite(RE_DE, LOW); // Default mode is receiving
 
-  Serial.println(" Перевірка підключення датчиків...");
+  Serial.println("Checking sensor connections...");
 
-  // Перевірка підключення датчиків
+  // Checking sensor connections
   bool dhtStatus = checkDHT22();
   bool pirStatus = checkHC_SR501();
   bool mq9Status = checkMQ9();
 
   if (!dhtStatus) {
-    Serial.println(" Датчик DHT22 НЕ підключено або не відповідає!");
+    Serial.println("DHT22 sensor NOT connected or not responding!");
   } else {
-    Serial.println(" Датчик DHT22 успішно підключений.");
+    Serial.println("DHT22 sensor successfully connected.");
   }
 
   if (!pirStatus) {
-    Serial.println(" Датчик HC-SR501 НЕ підключено або не відповідає!");
+    Serial.println("HC-SR501 sensor NOT connected or not responding!");
   } else {
-    Serial.println("Датчик HC-SR501 успішно підключений.");
+    Serial.println("HC-SR501 sensor successfully connected.");
   }
 
   if (!mq9Status) {
-    Serial.println(" Датчик MQ-9 НЕ підключено або не відповідає!");
+    Serial.println("MQ-9 sensor NOT connected or not responding!");
   } else {
-    Serial.println(" Датчик MQ-9 успішно підключений.");
+    Serial.println("MQ-9 sensor successfully connected.");
   }
 }
 
 void loop() {
-  // Зчитування даних з датчика DHT22
+  // Reading data from DHT22 sensor
   float temperature = dht.readTemperature();
   float humidity = dht.readHumidity();
 
-  // Зчитування даних з HC-SR501
+  // Reading data from HC-SR501 sensor
   bool motionDetected = digitalRead(PIRPIN);
 
-  // Зчитування даних з MQ-9
+  // Reading data from MQ-9 sensor
   int sensorValue = analogRead(MQ9Analog);
   float CO_ppm = getCOppm(sensorValue);
   float CH4_ppm = getCH4ppm(sensorValue);
 
-  // Формування рядка даних для передачі (додаємо ID)
-  String data = DEVICE_ID + " / Температура: " + temperature +
-                " / Вологість: " + humidity +
-                " / Рух: " + (motionDetected ? "Так" : "Ні") +
+  // Forming data string for transmission (adding ID)
+  String data = DEVICE_ID + " / Temperature: " + temperature +
+                " / Humidity: " + humidity +
+                " / Motion detected: " + (motionDetected ? "Yes" : "No") +
                 " / CO: " + CO_ppm + " ppm" +
                 " / CH₄: " + CH4_ppm + " ppm";
 
-  Serial.println(" Поточні показники:");
+  Serial.println("Current sensor readings:");
   Serial.println(data);
 
-  // Передача даних через RS485
+  // Transmitting data via RS485
   digitalWrite(RE_DE, HIGH);
   delay(1);  
   RS485.println(data);
   delay(1); 
-  digitalWrite(RE_DE, LOW); // Повертаємося у режим прийому
+  digitalWrite(RE_DE, LOW); // Returning to receive mode
 
   delay(1000); 
 }
