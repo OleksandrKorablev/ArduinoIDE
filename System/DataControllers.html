@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <title>Дані з контролерів</title>
+  <link rel="stylesheet" href="styles/DataControllersStyle.css">
+</head>
+<body>
+  <h1>Моніторинг середовища</h1>
+
+  <div class="filter-container">
+    <label for="deviceFilter">Фільтр за контролером:</label>
+    <select id="deviceFilter">
+      <option value="all">Усі контролери</option>
+    </select>
+  </div>
+
+  <h2>Таблиця даних</h2>
+  <table id="dataTable">
+    <thead>
+      <tr>
+        <th>Контролер</th>
+        <th>Час / Дата</th>
+        <th>Температура (°C)</th>
+        <th>Вологість (%)</th>
+        <th>Стан повітря (CO / CH₄)</th>
+        <th>Рух</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <h2>Графік температури</h2>
+  <canvas id="tempChart"></canvas>
+
+  <h2>Графік вологості</h2>
+  <canvas id="humidityChart"></canvas>
+
+  <h2>Графік стану повітря (CO / CH₄)</h2>
+  <canvas id="gasChart"></canvas>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="js/dataReader.js"></script>
+  <script src="js/charts.js"></script>
+</body>
+</html>

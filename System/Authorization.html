@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8" />
+  <title>Авторизація</title>
+  <link rel="stylesheet" href="styles/AuthorizationStyle.css" />
+</head>
+<body>
+  <div class="login-container">
+    <h2>Вхід до системи</h2>
+    <input type="text" id="username" placeholder="Логін" />
+    <input type="password" id="password" placeholder="Пароль" />
+
+    <!-- Кнопка "Забули логін або пароль?" -->
+    <p class="forgot-password" onclick="showHint()">Забули логін або пароль?</p>
+
+    <button onclick="login()">Увійти</button>
+    <p id="error" class="error"></p>
+  </div>
+
+  <!-- Модальне вікно -->
+  <div id="modal" class="modal">
+    <div class="modal-content">
+      <span class="close" onclick="closeHint()">&times;</span>
+      <p>
+        Переглянути логін та пароль можна у файлі <strong>Users.json</strong><br />
+        Шлях: <code>System\Login_and_Password</code> на SD-картці.
+      </p>
+    </div>
+  </div>
+
+  <script src="js/auth.js"></script>
+</body>
+</html>
