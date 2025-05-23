@@ -106,11 +106,15 @@ void loop() {
   Serial.println(data);
 
   // Transmitting data via RS485
-  digitalWrite(RE_DE, HIGH);
+  digitalWrite(RE_DE, HIGH); // Set to transmit mode
   delay(1);  
   RS485.println(data);
   delay(1); 
-  digitalWrite(RE_DE, LOW); // Returning to receive mode
+  digitalWrite(RE_DE, LOW); // Return to receive mode
+
+  // Debug message to confirm RS485 transmission
+  Serial.println("Data transmitted via RS485:");
+  Serial.println(data);
 
   delay(1000); 
 }
