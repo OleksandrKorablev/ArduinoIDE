@@ -7,7 +7,7 @@
 const char* ssid = "zakatov";         // Ім'я мережі
 const char* password = "zaqxsw228";   // Пароль мережі
 
-// ===================== SD Card configuration =====================
+// ===================== SD Card Configuration =====================
 #define SD_CS 5  // Пін, до якого підключено Chip Select SD модуля
 
 // ===================== Create HTTP Server =====================
@@ -19,7 +19,7 @@ void setup() {
 
   // Підключення до Wi-Fi
   Serial.print("Connecting to Wi-Fi...");
-  WiFi.mode(WIFI_STA); // Встановлюємо режим станції
+  WiFi.mode(WIFI_STA); // Встановлюємо режим як станція (STA)
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -44,27 +44,23 @@ void setup() {
     Serial.println("File /System/Authorization.html not found.");
   }
 
-  // Налаштування маршруту для кореневого запиту "/"
-  // Цей маршрут повертає просту HTML-сторінку з повідомленням та кнопкою
-  server.on("/", HTTP_GET, []() {
-    String html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>ESP32 Status</title></head><body>";
-    html += "<h1>Everything works!</h1>";
-    html += "<p><a href='/auth'><button style='font-size:20px;padding:10px;'>Proceed to Authorization</button></a></p>";
-    html += "</body></html>";
-    server.send(200, "text/html", html);
-  });
+  // Налаштування статичних маршрутів для ресурсів, що використовуються у сторінці
+  server.serveStatic("/styles", SD, "/System/styles");
+  server.serveStatic("/js", SD, "/System/js");
+  server.serveStatic("/libs", SD, "/System/libs");
+  server.serveStatic("/Login_and_Password", SD, "/System/Login_and_Password");
+  server.serveStatic("/DataFromMicrocontrollers", SD, "/System/DataFromMicrocontrollers");
 
-  // Налаштування маршруту "/auth"
-  // Цей маршрут стрімить вміст файлу /System/Authorization.html
-  server.on("/auth", HTTP_GET, []() {
+  // Налаштування кореневого маршруту для прямого відкриття Authorization.html
+  server.on("/", HTTP_GET, []() {
     if (SD.exists("/System/Authorization.html")) {
       File authFile = SD.open("/System/Authorization.html", FILE_READ);
       if (authFile) {
-        Serial.println("Streaming Authorization.html file...");
+        Serial.println("Streaming /System/Authorization.html...");
         server.streamFile(authFile, "text/html");
         authFile.close();
       } else {
-        Serial.println("Error opening /System/Authorization.html file.");
+        Serial.println("Error opening /System/Authorization.html!");
         server.send(500, "text/html", "<h1>Error opening Authorization.html file!</h1>");
       }
     } else {
@@ -78,5 +74,5 @@ void setup() {
 }
 
 void loop() {
-  server.handleClient(); // Обробка вхідних HTTP-запитів
+  server.handleClient(); // Постійна обробка HTTP-запитів
 }
