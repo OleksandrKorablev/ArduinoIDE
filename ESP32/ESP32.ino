@@ -18,12 +18,12 @@
 #define RS485_RE_DE_PIN 13    // RS485 mode control (Receive/Transmit)
 
 // ===================== Wi-Fi Settings =====================
-const char* ssid = "YOUR_SSID";
-const char* password = "YOUR_PASSWORD";
+const char* ssid = "zakatov";
+const char* password = "zaqxsw228";
 
-// ===================== Folders and Files =====================
-const char* systemFolder = "/System";
-const char* dataFolder = "/System/DataFromMicrocontrollers/";
+// Глобальні змінні для шляхів до папок – присвоєння буде виконане після ініціалізації SD карти
+String systemFolder;
+String dataFolder;
 
 // ===================== Create HTTP Server =====================
 WebServer server(80);
@@ -67,33 +67,42 @@ void setup() {
   } else {
     Serial.println("SD card successfully initialized.");
 
+    // Тепер, після успішної ініціалізації, присвоюємо значення для шляхів
+    systemFolder = "/System";
+    dataFolder   = "/System/DataFromMicrocontrollers/";
+
     // Check existence of /System folder
-    if (!SD.exists(systemFolder)) {
+    if (!SD.exists(systemFolder.c_str())) {
       Serial.println("'/System' folder not found!");
     } else {
       Serial.println("'/System' folder found.");
     }
 
-    // Check and create /System/DataFromMicrocontrollers folder
-    if (!SD.exists(dataFolder)) {
+    // Check and create /System/DataFromMicrocontrollers folder if necessary
+    if (!SD.exists(dataFolder.c_str())) {
       Serial.println("Creating '/System/DataFromMicrocontrollers' folder...");
-      SD.mkdir(dataFolder);
+      SD.mkdir(dataFolder.c_str());
       Serial.println("Folder created!");
     } else {
       Serial.println("'/System/DataFromMicrocontrollers' folder already exists.");
     }
 
     // Ensure that index.json exists; if not, create it with initial structure.
-    if (!SD.exists(String(dataFolder) + "index.json")) {
+    String indexPath = dataFolder + "index.json";
+    if (!SD.exists(indexPath.c_str())) {
       Serial.println("Creating index.json file...");
-      File initFile = SD.open(String(dataFolder) + "index.json", FILE_WRITE);
-      DynamicJsonDocument initDoc(1024);
-      initDoc["files"] = JsonArray();  // Create an empty array
-      if (serializeJson(initDoc, initFile) == 0) {
-        Serial.println("Failed to write to index.json");
+      File initFile = SD.open(indexPath.c_str(), FILE_WRITE);
+      if (initFile) {
+        DynamicJsonDocument initDoc(1024);
+        initDoc["files"] = JsonArray();  // Create an empty array
+        if (serializeJson(initDoc, initFile) == 0) {
+          Serial.println("Failed to write to index.json");
+        }
+        initFile.close();
+        Serial.println("index.json created.");
+      } else {
+        Serial.println("Failed to open index.json for writing.");
       }
-      initFile.close();
-      Serial.println("index.json created.");
     }
   }
 
@@ -105,25 +114,27 @@ void setup() {
   Serial.println("RS485 ready for data reception.");
 
   // Check for Authorization.html file
+  String authPath = systemFolder + "/Authorization.html";
   Serial.println("Checking for Authorization.html file...");
-  if (SD.exists(String(systemFolder) + "/Authorization.html")) {
+  if (SD.exists(authPath.c_str())) {
     Serial.println("Authorization.html file found.");
   } else {
     Serial.println("Authorization.html file NOT FOUND!");
   }
 
   // Setup HTTP server root route.
-  server.on("/", HTTP_GET, []() {
-    String authFilePath = String(systemFolder) + "/Authorization.html";
-    if (SD.exists(authFilePath)) {
-      File file = SD.open(authFilePath, FILE_READ);
-      String html = "";
-      while (file.available()) {
-        html += (char)file.read();
+  server.on("/", HTTP_GET, [authPath]() {
+    if (SD.exists(authPath.c_str())) {
+      File authFile = SD.open(authPath.c_str(), FILE_READ);
+      if (authFile) {
+        Serial.println("Streaming Authorization.html page...");
+        // Stream the file content without loading it entirely into memory
+        server.streamFile(authFile, "text/html");
+        authFile.close();
+      } else {
+        Serial.println("Error opening Authorization.html file.");
+        server.send(500, "text/html", "<h1>Error opening Authorization.html file!</h1>");
       }
-      file.close();
-      Serial.println("Authorization.html page loaded.");
-      server.send(200, "text/html", html);
     } else {
       server.send(404, "text/html", "<h1>Authorization page not found!</h1>");
     }
@@ -151,7 +162,7 @@ void loop() {
 
       // Get current timestamp.
       String timestamp = getFormattedTimestamp();
-      String fileName = String(dataFolder) + deviceID + "_" + timestamp + ".json";
+      String fileName = dataFolder + deviceID + "_" + timestamp + ".json";
 
       // Create JSON document with device data.
       DynamicJsonDocument jsonDoc(256);
@@ -172,7 +183,7 @@ void loop() {
       jsonDoc["CH4"] = sensorData.substring(ch4Idx + 6).toFloat();
 
       // Write JSON document to file.
-      File dataFile = SD.open(fileName, FILE_WRITE);
+      File dataFile = SD.open(fileName.c_str(), FILE_WRITE);
       if (dataFile) {
         serializeJson(jsonDoc, dataFile);
         dataFile.close();
@@ -183,22 +194,20 @@ void loop() {
       }
 
       // Update index.json.
-      String indexPath = String(dataFolder) + "index.json";
-      File indexFile = SD.open(indexPath, FILE_READ);
+      String indexPath = dataFolder + "index.json";
+      File indexFile = SD.open(indexPath.c_str(), FILE_READ);
       DynamicJsonDocument indexDoc(1024);
       if (indexFile) {
         deserializeJson(indexDoc, indexFile);
         indexFile.close();
       }
-      // Create "files" array if it does not exist.
       if (!indexDoc.containsKey("files")) {
         indexDoc["files"] = JsonArray();
       }
-      // Remove the dataFolder prefix from the file name.
-      size_t folderLength = strlen(dataFolder);
+      size_t folderLength = dataFolder.length();
       indexDoc["files"].add(fileName.substring(folderLength));
 
-      indexFile = SD.open(indexPath, FILE_WRITE);
+      indexFile = SD.open(indexPath.c_str(), FILE_WRITE);
       serializeJson(indexDoc, indexFile);
       indexFile.close();
       Serial.println("index.json updated!");
