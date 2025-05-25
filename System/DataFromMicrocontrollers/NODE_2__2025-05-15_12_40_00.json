@@ -1,0 +1,9 @@
+{
+  "deviceID": "NODE_2",
+  "timestamp": "2025-05-15_12:40:00",
+  "temperature": 21.9,
+  "humidity": 48,
+  "motion": true,
+  "CO": 0.03,
+  "CH4": 1.0
+}

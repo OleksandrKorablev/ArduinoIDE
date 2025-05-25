@@ -1,4 +1,4 @@
-const basePath = "DataFromMicrocontrollers/";
+const basePath = "/DataFromMicrocontrollers/";
 let allSensorData = [];
 let currentFilter = "all";
 
