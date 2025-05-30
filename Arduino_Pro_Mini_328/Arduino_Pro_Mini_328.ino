@@ -1,120 +1,181 @@
-#include <SoftwareSerial.h>
 #include <DHT.h>
+#include <SoftwareSerial.h>
+#include <math.h>
 
-#define DHTPIN 10       // Connect DATA of DHT22 to D10
-#define DHTTYPE DHT22   // Sensor type DHT22
-
-#define PIRPIN 11       // Connect OUT of HC-SR501 to D11
-
-#define MQ9Analog A0    // Analog output of MQ-9 to A0
-#define MQ9Digital 12   // Digital output of MQ-9 to D12
-
-#define RE_DE 13        // Control RE and DE on Max485
-
+// ==== Sensor Setup ====
+// DHT22 підключений до D10
+#define DHTPIN 10       
+#define DHTTYPE DHT22   
 DHT dht(DHTPIN, DHTTYPE);
-SoftwareSerial RS485(2, 3); // RX, TX for Max485
 
-const String DEVICE_ID = "ROOM_1"; // Unique device ID
+// MQ‑9: аналоговий вихід на A0; (цифровий на D12 можна підключати, але в цьому прикладі використовується аналоговий)
+#define MQ9_ANALOG A0
 
-// Function to determine CO level in ppm
+// PIR (HC-SR501): підключено до D11
+#define PIR_PIN 11       
+
+// ==== RS485 Setup ====
+// Arduino Pro Mini підключена до MAX485 таким чином:
+// - HW Serial для дебагу не використовується для RS485,
+// - Для RS485 застосовуємо SoftwareSerial на пінах 2 (RX) і 3 (TX)
+// - Пін RS485_CONTROL (RE/DE) підключено до D13
+#define RS485_CONTROL 13  
+SoftwareSerial RS485(2, 3); // RX, TX для RS485
+
+// ==== Device ID ====
+const String DEVICE_ID = "ROOM_1";
+
+// ==== Gas level estimation ====
+// Функції для розрахунку концентрацій газів (довільні коефіцієнти)
 float getCOppm(int sensorValue) {
+  // Тут використовується просте співвідношення; реальна функція може бути складнішою
   float voltage = (sensorValue / 1023.0) * 5.0;
-  float CO_ppm = pow((voltage / 5.0), -1.5) * 100; // Calibration function for CO
-  return CO_ppm;
+  // Довільне масштабування (наприклад, 0.20)
+  return voltage * 0.20;
 }
 
-// Function to determine CH₄ level in ppm
 float getCH4ppm(int sensorValue) {
   float voltage = (sensorValue / 1023.0) * 5.0;
-  float CH4_ppm = pow((voltage / 5.0), -1.8) * 80; // Calibration function for CH₄
-  return CH4_ppm;
+  // Довільне масштабування (наприклад, 0.25)
+  return voltage * 0.25;
 }
 
+// ==== Додаткові функції RS485: управління режимом передачі/прийому ====
+void RS485_setTransmit() {
+  digitalWrite(RS485_CONTROL, HIGH); // У режим передачі
+}
+
+void RS485_setReceive() {
+  digitalWrite(RS485_CONTROL, LOW);  // У режим прийому
+}
+
+// ==== Функції перевірки підключення датчиків ====
+
+// Перевірка DHT22 (якщо при зчитуванні температури чи вологості отримуємо NaN, то сенсор не працює)
 bool checkDHT22() {
-  float testTemp = dht.readTemperature();
-  float testHum = dht.readHumidity();
-  return !isnan(testTemp) && !isnan(testHum);
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  return !(isnan(t) || isnan(h));
 }
 
-bool checkHC_SR501() {
-  int testPIR = digitalRead(PIRPIN);
-  return (testPIR == HIGH || testPIR == LOW);
-}
-
+// Перевірка MQ‑9: якщо аналогове значення менше порогового (наприклад, 10), вважаємо, що сенсор не підключено
 bool checkMQ9() {
-  int testAnalog = analogRead(MQ9Analog);
-  int testDigital = digitalRead(MQ9Digital);
-  return (testAnalog >= 0 && testAnalog <= 1023) && (testDigital == HIGH || testDigital == LOW);
+  int val = analogRead(MQ9_ANALOG);
+  return (val > 10);
+}
+
+// Перевірка PIR: провести тест протягом 5 секунд, і якщо хоча б один раз зчитано HIGH, вважаємо, що PIR працює.
+// Якщо протягом тесту HIGH не з’явився, виводимо помилку.
+bool checkPIR() {
+  unsigned long startTime = millis();
+  bool detected = false;
+  while (millis() - startTime < 5000) {
+    if (digitalRead(PIR_PIN) == HIGH) {
+      detected = true;
+      break;
+    }
+  }
+  return detected;
 }
 
 void setup() {
+  // Ініціалізація серійного порту для дебагу
   Serial.begin(9600);
+  
+  // Ініціалізація RS485 SoftwareSerial
   RS485.begin(9600);
+  
+  // Ініціалізація DHT22
   dht.begin();
-  pinMode(PIRPIN, INPUT);
-  pinMode(MQ9Digital, INPUT);
-  pinMode(RE_DE, OUTPUT);
-  digitalWrite(RE_DE, LOW); // Default mode is receiving
-
-  Serial.println("Checking sensor connections...");
-
-  // Checking sensor connections
-  bool dhtStatus = checkDHT22();
-  bool pirStatus = checkHC_SR501();
-  bool mq9Status = checkMQ9();
-
-  if (!dhtStatus) {
-    Serial.println("DHT22 sensor NOT connected or not responding!");
+  
+  // Налаштування входів для PIR і MQ‑9
+  pinMode(PIR_PIN, INPUT);
+  pinMode(MQ9_ANALOG, INPUT);
+  
+  // Налаштування RS485 CONTROL
+  pinMode(RS485_CONTROL, OUTPUT);
+  RS485_setReceive(); // Спочатку у режимі прийому
+  
+  Serial.println("=== SYSTEM START ===");
+  
+  // Перевірка підключення датчиків
+  if (!checkDHT22()) {
+    Serial.println("Error: DHT22 sensor NOT connected or not responding!");
   } else {
-    Serial.println("DHT22 sensor successfully connected.");
+    Serial.println("DHT22 sensor OK.");
   }
-
-  if (!pirStatus) {
-    Serial.println("HC-SR501 sensor NOT connected or not responding!");
+  
+  if (!checkMQ9()) {
+    Serial.println("Error: MQ-9 sensor NOT connected or reading too low!");
   } else {
-    Serial.println("HC-SR501 sensor successfully connected.");
+    Serial.println("MQ-9 sensor OK.");
   }
-
-  if (!mq9Status) {
-    Serial.println("MQ-9 sensor NOT connected or not responding!");
+  
+  if (!checkPIR()) {
+    Serial.println("Error: HC-SR501 (PIR) sensor NOT connected or not responding!");
   } else {
-    Serial.println("MQ-9 sensor successfully connected.");
+    Serial.println("PIR sensor OK.");
   }
 }
 
 void loop() {
-  // Reading data from DHT22 sensor
+  // Перевірка підключення (щоб переконатися, що датчики продовжують працювати)
+  bool dhtStatus = checkDHT22();
+  bool mq9Status = checkMQ9();
+  bool pirStatus = checkPIR(); // Оскільки PIR може бути неактивним, тут використаємо його поточне зчитування десь окремо
+  
+  if (!dhtStatus || !mq9Status || !pirStatus) {
+    // Якщо хоча б один сенсор не відповідає, інформуємо і пропускаємо передачу
+    if (!dhtStatus) { Serial.println("Polling error: DHT22 not responding."); }
+    if (!mq9Status) { Serial.println("Polling error: MQ-9 reading too low."); }
+    if (!pirStatus) { Serial.println("Polling error: PIR sensor not detecting any motion (check connection)."); }
+    Serial.println("Skipping data transmission.");
+    delay(3000);
+    return;
+  }
+  
+  // ---- Опитування датчиків ----
   float temperature = dht.readTemperature();
   float humidity = dht.readHumidity();
-
-  // Reading data from HC-SR501 sensor
-  bool motionDetected = digitalRead(PIRPIN);
-
-  // Reading data from MQ-9 sensor
-  int sensorValue = analogRead(MQ9Analog);
-  float CO_ppm = getCOppm(sensorValue);
-  float CH4_ppm = getCH4ppm(sensorValue);
-
-  // Forming data string for transmission (adding ID)
-  String data = DEVICE_ID + " / Temperature: " + temperature +
-                " / Humidity: " + humidity +
-                " / Motion detected: " + (motionDetected ? "Yes" : "No") +
-                " / CO: " + CO_ppm + " ppm" +
-                " / CH₄: " + CH4_ppm + " ppm";
-
-  Serial.println("Current sensor readings:");
-  Serial.println(data);
-
-  // Transmitting data via RS485
-  digitalWrite(RE_DE, HIGH); // Set to transmit mode
-  delay(1);  
-  RS485.println(data);
-  delay(1); 
-  digitalWrite(RE_DE, LOW); // Return to receive mode
-
-  // Debug message to confirm RS485 transmission
-  Serial.println("Data transmitted via RS485:");
-  Serial.println(data);
-
-  delay(1000); 
+  
+  int mq9Raw = analogRead(MQ9_ANALOG);
+  float CO_ppm = getCOppm(mq9Raw);
+  float CH4_ppm = getCH4ppm(mq9Raw);
+  
+  // Для PIR: якщо сигнал HIGH – рух є; якщо LOW – руху немає.
+  bool motion = digitalRead(PIR_PIN) == HIGH;
+  const char* movement = motion ? "YES" : "NO";
+  
+  // ---- Формування повідомлення ----
+  String message = "ID: " + DEVICE_ID;
+  message += " / Temperature: " + String(temperature, 1);
+  message += " / Humidity: " + String(humidity, 1);
+  message += " / CH₄: " + String(CH4_ppm, 2);
+  message += " / CO: " + String(CO_ppm, 2);
+  message += " / Movement: " + String(movement);
+  
+  // Вивід даних у серійний монітор для перевірки
+  Serial.println("Collected Data: " + message);
+  
+  // ---- Передача даних через RS485 ----
+  RS485_setTransmit(); // У режим передачі
+  delay(2);            // Коротка затримка для стабілізації
+  
+  // Передаємо дані через SoftwareSerial RS485
+  int bytesSent = RS485.write(message.c_str(), message.length());
+  RS485.flush(); // Чекаємо завершення передачі
+  
+  if (bytesSent == message.length()) {
+    Serial.println("RS485 Transmission successful.");
+  } else {
+    Serial.print("RS485 Transmission error: Only ");
+    Serial.print(bytesSent);
+    Serial.print(" bytes sent out of ");
+    Serial.print(message.length());
+    Serial.println(" bytes.");
+  }
+  
+  RS485_setReceive(); // Повертаємо RS485 у режим прийому
+  
+  delay(3000); // Затримка між опитуваннями
 }
