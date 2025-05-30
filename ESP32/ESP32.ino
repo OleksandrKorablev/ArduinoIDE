@@ -13,8 +13,8 @@
 #define RS485_RE_DE_PIN 13     // RS485 mode control pin (RE + DE together)
 
 // ======= Wi-Fi Credentials =======
-const char* ssid = "YOUR_SSID";
-const char* password = "YOUR_PASSWORD";
+const char* ssid = "zakatov";       
+const char* password = "zaqxsw228";  
 
 // ======= HTTP Server =======
 WebServer server(80);
