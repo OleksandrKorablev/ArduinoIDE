@@ -1,9 +1,9 @@
 {
-  "deviceID": "NODE_2",
-  "timestamp": "2025-05-15_12:45:00",
-  "temperature": 24.5,
-  "humidity": 49,
-  "motion": false,
-  "CO": 0.14,
-  "CH4": 1.2
+  "deviceID": "ROOM_2",
+  "timestamp": "2025 05 15 12:28:00",
+  "temperature": 25.5,
+  "humidity": 48,
+  "motion": true,
+  "CO": 0.20,
+  "CH4": 1.9
 }
