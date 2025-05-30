@@ -2,269 +2,165 @@
 #include <WebServer.h>
 #include <SPI.h>
 #include <SD.h>
-#include <SoftwareSerial.h>
+#include <HardwareSerial.h>
+#include <time.h>
+#include <ArduinoJson.h>
 
-// ==== Wi-Fi Settings ====
-const char* ssid = "zakatov";
-const char* password = "zaqxsw228";
+// ======= Pin Configuration =======
+#define SD_CS_PIN 2            // Chip Select for SD card
+#define RS485_RX_PIN 16        // RS485 Receive pin (RO)
+#define RS485_TX_PIN 17        // RS485 Transmit pin (DI)
+#define RS485_RE_DE_PIN 13     // RS485 mode control pin (RE + DE together)
 
-// ==== RS485 Settings ====
-#define RS485_RX 16
-#define RS485_TX 17
-#define RS485_CONTROL 13
-SoftwareSerial RS485(RS485_RX, RS485_TX);
+// ======= Wi-Fi Credentials =======
+const char* ssid = "YOUR_SSID";
+const char* password = "YOUR_PASSWORD";
 
-// ==== SD Card Configuration ====
-#define SD_CS 5
+// ======= HTTP Server =======
 WebServer server(80);
 
-// ==== Time Setup ====
-// Для getLocalTime() переконайтеся, що NTP клієнт налаштований (ESP32 має вбудовану підтримку SNTP)
-#include "time.h"
-const char* ntpServer = "pool.ntp.org";
-const long  gmtOffset_sec = 3600; // Змінити для вашого регіону, наприклад, +1 година
-const int   daylightOffset_sec = 0;
-
-// ==== Web Server Handlers ====
-void handleRoot() {
-  if (SD.exists("/System/Authorization.html")) {
-    File authFile = SD.open("/System/Authorization.html", FILE_READ);
-    if (authFile) {
-      Serial.println("Streaming /System/Authorization.html...");
-      server.streamFile(authFile, "text/html");
-      authFile.close();
-    } else {
-      Serial.println("Error opening /System/Authorization.html!");
-      server.send(500, "text/html", "<h1>Error opening Authorization.html!</h1>");
-    }
-  } else {
-    server.send(404, "text/html", "<h1>Authorization page not found!</h1>");
-  }
-}
-
-void handleDataControllers() {
-  if (SD.exists("/System/DataControllers.html")) {
-    File dcFile = SD.open("/System/DataControllers.html", FILE_READ);
-    if (dcFile) {
-      Serial.println("Streaming /System/DataControllers.html...");
-      server.streamFile(dcFile, "text/html");
-      dcFile.close();
-    } else {
-      Serial.println("Error opening /System/DataControllers.html!");
-      server.send(500, "text/html", "<h1>Error opening DataControllers.html!</h1>");
-    }
-  } else {
-    server.send(404, "text/html", "<h1>DataControllers page not found!</h1>");
-  }
-}
-
-// ==== Time synchronization function ====
-void initTime() {
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-  struct tm timeinfo;
-  if(getLocalTime(&timeinfo)){
-    Serial.println("Time synchronized");
-  } else {
-    Serial.println("Failed to obtain time");
-  }
-}
-
-// ==== Function to get current timestamp ====
-String getCurrentTimestamp() {
-  struct tm timeinfo;
-  if(!getLocalTime(&timeinfo)) {
-    return "Unknown_Time";
-  }
-  char buffer[20];
-  sprintf(buffer, "%04d-%02d-%02d_%02d-%02d-%02d",
-          timeinfo.tm_year + 1900,
-          timeinfo.tm_mon + 1,
-          timeinfo.tm_mday,
-          timeinfo.tm_hour,
-          timeinfo.tm_min,
-          timeinfo.tm_sec);
+// ======= Function to Format Timestamp =======
+String getFormattedTimestamp() {
+  time_t now = time(nullptr);
+  struct tm *timeinfo = gmtime(&now);
+  char buffer[21];
+  strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", timeinfo);
   return String(buffer);
-}
-
-// ==== RS485 Helper Functions ====
-void RS485_setTransmit() {
-  digitalWrite(RS485_CONTROL, HIGH);
-}
-
-void RS485_setReceive() {
-  digitalWrite(RS485_CONTROL, LOW);
-}
-
-// ==== Function to update index.json ====
-void updateIndexJSON(String newFileName) {
-  String indexFilePath = "/System/DataFromMicrocontrollers/index.json";
-  File indexFile = SD.open(indexFilePath, FILE_READ);
-  String indexData;
-  if (indexFile) {
-    while (indexFile.available()) {
-      indexData += (char)indexFile.read();
-    }
-    indexFile.close();
-  } else {
-    // Якщо index.json не існує, створимо новий.
-    indexData = "{\n  \"files\": [\n  ]\n}";
-  }
-  
-  int filesPos = indexData.indexOf("\"files\": [");
-  if (filesPos != -1) {
-    int insertPos = indexData.indexOf("]", filesPos);
-    // Якщо список не порожній, додаємо кому.
-    String addition = "";
-    if (indexData.charAt(insertPos - 1) != '[') {
-      addition = ",\n    \"" + newFileName + "\"";
-    } else {
-      addition = "\n    \"" + newFileName + "\"";
-    }
-    indexData = indexData.substring(0, insertPos) + addition + "\n  " + indexData.substring(insertPos);
-  } else {
-    Serial.println("Error reading index.JSON structure.");
-    return;
-  }
-  
-  indexFile = SD.open(indexFilePath, FILE_WRITE);
-  if (indexFile) {
-    indexFile.print(indexData);
-    indexFile.close();
-    Serial.println("index.JSON updated with: " + newFileName);
-  } else {
-    Serial.println("Error updating index.JSON.");
-  }
-}
-
-// ==== Function to save received RS485 data to SD card as JSON ====
-void saveToSDCard(String data) {
-  // Очікуємо, що data має формат: 
-  // "ID: ROOM_1 / Temperature: 10.8 / Humidity: 48.5 / CH₄: 99.35 / CO: 119.79 / Movement: NO"
-  
-  // Для простоти будемо розбирати дані за допомогою substring() та indexOf().
-  String deviceID, temperature, humidity, CO, CH4, movement;
-  
-  int idStart = data.indexOf("ID: ") + 4;
-  int tempStart = data.indexOf("/ Temperature: ") + 14;
-  int humStart = data.indexOf("/ Humidity: ") + 12;
-  int ch4Start = data.indexOf("/ CH₄: ") + 7;
-  int coStart = data.indexOf("/ CO: ") + 6;
-  int movStart = data.indexOf("/ Movement: ") + 11;
-  
-  deviceID = data.substring(idStart, tempStart - 14);
-  temperature = data.substring(tempStart, humStart - 12);
-  humidity = data.substring(humStart, ch4Start - 8);
-  CH4 = data.substring(ch4Start, coStart - 7);
-  CO = data.substring(coStart, movStart - 12);
-  movement = data.substring(movStart);
-  
-  String timestamp = getCurrentTimestamp();
-  
-  // Формуємо ім'я файлу
-  String fileName = "/System/DataFromMicrocontrollers/" + deviceID + "__" + timestamp + ".json";
-  
-  File dataFile = SD.open(fileName, FILE_WRITE);
-  if (dataFile) {
-    dataFile.println("{");
-    dataFile.println("  \"deviceID\": \"" + deviceID + "\",");
-    dataFile.println("  \"timestamp\": \"" + timestamp + "\",");
-    dataFile.println("  \"temperature\": " + temperature + ",");
-    dataFile.println("  \"humidity\": " + humidity + ",");
-    dataFile.println("  \"motion\": " + (movement == "YES" ? "true" : "false") + ",");
-    dataFile.println("  \"CO\": " + CO + ",");
-    dataFile.println("  \"CH4\": " + CH4);
-    dataFile.println("}");
-    dataFile.close();
-    Serial.println("File created: " + fileName);
-    updateIndexJSON(fileName);
-  } else {
-    Serial.println("Error writing to SD card.");
-  }
-}
-
-// ==== Function for RS485 data reception ====
-void receiveRS485Data() {
-  digitalWrite(RS485_CONTROL, LOW);
-  if (RS485.available()) {
-    String receivedData = RS485.readStringUntil('\n');
-    Serial.println("Received data:");
-    Serial.println(receivedData);
-    saveToSDCard(receivedData);
-  }
 }
 
 void setup() {
   Serial.begin(115200);
-  RS485.begin(9600);
+  delay(1000);
   
-  pinMode(RS485_CONTROL, OUTPUT);
-  digitalWrite(RS485_CONTROL, LOW);
-  
+  // ======= Connecting to Wi-Fi =======
   Serial.print("Connecting to Wi-Fi...");
-  WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
+  unsigned long startAttemptTime = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 10000) {
     Serial.print(".");
+    delay(500);
   }
-  Serial.println("\nWi-Fi Connected!");
-  Serial.print("ESP32 Local IP Address: ");
-  Serial.println(WiFi.localIP());
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nWi-Fi connected!");
+    Serial.print("Local IP: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("\nFailed to connect to Wi-Fi.");
+  }
   
+  // ======= Synchronizing Time via NTP =======
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  Serial.println("Synchronizing time...");
+  
+  // ======= Initializing SD Card =======
   Serial.println("Initializing SD card...");
-  if (!SD.begin(SD_CS)) {
+  if (!SD.begin(SD_CS_PIN)) {
     Serial.println("SD card initialization failed!");
     return;
   }
   Serial.println("SD card initialized successfully.");
+  if (!SD.exists("/System/DataFromMicrocontrollers")) {
+    Serial.println("Creating folder /System/DataFromMicrocontrollers...");
+    SD.mkdir("/System/DataFromMicrocontrollers");
+    Serial.println("Folder created.");
+  }
   
-  // Ініціалізація часу через NTP
-  initTime();
+  // ======= Setting Up RS485 Communication Using Hardware Serial (Serial2) =======
+  Serial.println("Configuring RS485 on Serial2...");
+  Serial2.begin(115200, SERIAL_8N1, RS485_RX_PIN, RS485_TX_PIN);
+  pinMode(RS485_RE_DE_PIN, OUTPUT);
+  digitalWrite(RS485_RE_DE_PIN, LOW); // LOW: receive mode
+  Serial.println("RS485 is ready to receive data.");
   
-  // Налаштування веб-сервера і статичних маршрутів
-  server.serveStatic("/styles", SD, "/System/styles");
-  server.serveStatic("/js", SD, "/System/js");
-  server.serveStatic("/libs", SD, "/System/libs");
-  server.serveStatic("/Login_and_Password", SD, "/System/Login_and_Password");
-  server.serveStatic("/DataFromMicrocontrollers", SD, "/System/DataFromMicrocontrollers");
+  // ======= Checking for Authorization.html on SD Card =======
+  Serial.println("Checking for Authorization.html file...");
+  if (SD.exists("/System/Authorization.html")) {
+    Serial.println("Authorization.html file found.");
+  } else {
+    Serial.println("Authorization.html file missing!");
+  }
   
+  // ======= Setting Up HTTP Server =======
   server.on("/", HTTP_GET, []() {
     if (SD.exists("/System/Authorization.html")) {
-      File authFile = SD.open("/System/Authorization.html", FILE_READ);
-      if (authFile) {
-        Serial.println("Streaming /System/Authorization.html...");
-        server.streamFile(authFile, "text/html");
-        authFile.close();
-      } else {
-        Serial.println("Error opening /System/Authorization.html!");
-        server.send(500, "text/html", "<h1>Error opening Authorization.html!</h1>");
+      File file = SD.open("/System/Authorization.html", FILE_READ);
+      String html = "";
+      while (file.available()) {
+        html += (char)file.read();
       }
+      file.close();
+      server.send(200, "text/html", html);
     } else {
       server.send(404, "text/html", "<h1>Authorization page not found!</h1>");
     }
   });
-  
-  server.on("/DataControllers.html", HTTP_GET, []() {
-    if (SD.exists("/System/DataControllers.html")) {
-      File dcFile = SD.open("/System/DataControllers.html", FILE_READ);
-      if (dcFile) {
-        Serial.println("Streaming /System/DataControllers.html...");
-        server.streamFile(dcFile, "text/html");
-        dcFile.close();
-      } else {
-        Serial.println("Error opening /System/DataControllers.html!");
-        server.send(500, "text/html", "<h1>Error opening DataControllers.html!</h1>");
-      }
-    } else {
-      server.send(404, "text/html", "<h1>DataControllers page not found!</h1>");
-    }
-  });
-  
   server.begin();
   Serial.println("HTTP server started.");
 }
 
 void loop() {
   server.handleClient();
-  receiveRS485Data();
+  
+  // ======= Receiving Data via RS485 Using Serial2 =======
+  if (Serial2.available()) {
+    String incomingData = Serial2.readStringUntil('\n');
+    incomingData.trim();
+    if (incomingData.length() > 0) {
+      Serial.println("Received from Arduino via RS485:");
+      Serial.println(incomingData);
+      
+      // ======= Parsing Data =======
+      int idx = incomingData.indexOf(" /");
+      String deviceID = (idx != -1) ? incomingData.substring(0, idx) : "UNKNOWN";
+      String sensorData = (idx != -1) ? incomingData.substring(idx + 3) : incomingData;
+      
+      // ======= Creating File Name with Timestamp =======
+      String timestamp = getFormattedTimestamp();
+      String fileName = "/System/DataFromMicrocontrollers/" + deviceID + "_" + timestamp + ".json";
+      
+      // ======= Creating JSON Document for Sensor Data =======
+      DynamicJsonDocument jsonDoc(256);
+      jsonDoc["deviceID"] = deviceID;
+      jsonDoc["timestamp"] = timestamp;
+      
+      // Parse sensor data (assuming a predefined format)
+      int tempIdx = sensorData.indexOf("Temperature: ");
+      int humIdx = sensorData.indexOf(" / Humidity: ");
+      int motionIdx = sensorData.indexOf(" / Motion: ");
+      int coIdx = sensorData.indexOf(" / CO: ");
+      int ch4Idx = sensorData.indexOf(" / CH₄: ");
+      if (tempIdx != -1 && humIdx != -1 && motionIdx != -1 && coIdx != -1 && ch4Idx != -1) {
+        jsonDoc["temperature"] = sensorData.substring(tempIdx + 12, humIdx).toFloat();
+        jsonDoc["humidity"] = sensorData.substring(humIdx + 12, motionIdx).toFloat();
+        jsonDoc["motion"] = (sensorData.substring(motionIdx + 7, coIdx) == "Yes");
+        jsonDoc["CO"] = sensorData.substring(coIdx + 6, ch4Idx).toFloat();
+        jsonDoc["CH4"] = sensorData.substring(ch4Idx + 6).toFloat();
+      }
+      
+      // ======= Writing JSON Data to SD Card =======
+      File dataFile = SD.open(fileName, FILE_WRITE);
+      if (dataFile) {
+        serializeJson(jsonDoc, dataFile);
+        dataFile.close();
+        Serial.println("Data saved to file:");
+        Serial.println(fileName);
+      } else {
+        Serial.println("ERROR writing to file!");
+      }
+      
+      // ======= Updating index.json =======
+      File indexFile = SD.open("/System/DataFromMicrocontrollers/index.json", FILE_READ);
+      DynamicJsonDocument indexDoc(1024);
+      if (indexFile) {
+        deserializeJson(indexDoc, indexFile);
+        indexFile.close();
+      }
+      indexDoc["files"].add(fileName.substring(String("/System/DataFromMicrocontrollers/").length()));
+      
+      indexFile = SD.open("/System/DataFromMicrocontrollers/index.json", FILE_WRITE);
+      serializeJson(indexDoc, indexFile);
+      indexFile.close();
+      Serial.println("index.json updated!");
+    }
+  }
 }
