@@ -1,6 +1,6 @@
 {
-  "deviceID": "NODE_1",
-  "timestamp": "2025-05-15_12:20:00",
+  "deviceID": "ROOM_1",
+  "timestamp": "2025 05 15 12:20:00",
   "temperature": 22.5,
   "humidity": 45,
   "motion": false,
