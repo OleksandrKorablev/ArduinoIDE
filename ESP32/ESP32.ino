@@ -12,7 +12,7 @@ const char* password = "zaqxsw228";
 
 // ==== RS485 Settings ====
 #define RS485_CONTROL 13  
-HardwareSerial Serial2(2);  
+HardwareSerial Serial2(2);
 
 // ==== SD Card Configuration ====
 #define SD_CS 5
@@ -60,14 +60,14 @@ void handleDataControllers() {
 void initTime() {
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   struct tm timeinfo;
-  if(getLocalTime(&timeinfo)){
+  if (getLocalTime(&timeinfo)) {
     Serial.println("Time synchronized");
   } else {
     Serial.println("Failed to obtain time");
   }
 }
 
-// ==== Get current timestamp ====
+// ==== Get Current Timestamp ====
 String getCurrentTimestamp() {
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo)) {
@@ -106,24 +106,18 @@ void updateIndexJSON(String newFileName) {
     indexFile.close();
   }
   
-  // Створимо документ для index.json
   StaticJsonDocument<1024> doc;
-  
   DeserializationError error = deserializeJson(doc, jsonString);
   if (error) {
-    // Якщо не вдалося прочитати index.json, ініціалізуємо порожній документ
     doc["files"] = JsonArray();
   }
   
   JsonArray files = doc["files"].as<JsonArray>();
-  
-  // Прибрати шлях із newFileName для запису в індекс (залишаємо тільки ім'я файлу)
   int slashPos = newFileName.lastIndexOf('/');
   String simpleName = (slashPos != -1) ? newFileName.substring(slashPos + 1) : newFileName;
   
   files.add(simpleName);
   
-  // Записуємо оновлений документ назад
   File outFile = SD.open(indexFilePath, FILE_WRITE);
   if (outFile) {
     serializeJsonPretty(doc, outFile);
@@ -134,11 +128,10 @@ void updateIndexJSON(String newFileName) {
   }
 }
 
-// ==== Save received RS485 data to SD as JSON using ArduinoJson ====
+// ==== Save Received RS485 Data to SD as JSON using ArduinoJson ====
 void saveToSDCard(String data) {
-  // Очікуваний формат даних:
+  // Формат очікуваних даних:
   // "ID: ROOM_1 / Temperature: 10.8 / Humidity: 48.5 / CH₄: 99.35 / CO: 119.79 / Movement: NO"
-  // Розберемо рядок вручну:
   String deviceID, temperature, humidity, CO, CH4, movement;
   int idStart = data.indexOf("ID: ") + 4;
   int tempStart = data.indexOf("/ Temperature: ") + 14;
@@ -156,39 +149,34 @@ void saveToSDCard(String data) {
   
   String timestamp = getCurrentTimestamp();
   
-  // Формуємо ім’я файлу без шляху для запису в index.json
-  String simpleFileName = deviceID + "__" + timestamp + ".json";
-  // А повний шлях для запису у SD:
-  String filePath = "/System/DataFromMicrocontrollers/" + simpleFileName;
+  // Ім'я файлу у форматі: /System/DataFromMicrocontrollers/ROOM_1__2025-05-15_12-20-00.json
+  String fileName = "/System/DataFromMicrocontrollers/" + deviceID + "__" + timestamp + ".json";
   
-  // Створюємо JSON документ для даних
   StaticJsonDocument<256> doc;
   doc["deviceID"] = deviceID;
   doc["timestamp"] = timestamp;
   doc["temperature"] = temperature.toFloat();
   doc["humidity"] = humidity.toFloat();
-  // Якщо рядок з рухом дорівнює "YES" (регістр чутливий), тоді true, інакше false.
   doc["motion"] = (movement == "YES");
   doc["CO"] = CO.toFloat();
   doc["CH4"] = CH4.toFloat();
   
-  // Запис у файл
-  File dataFile = SD.open(filePath, FILE_WRITE);
+  File dataFile = SD.open(fileName, FILE_WRITE);
   if (dataFile) {
     serializeJsonPretty(doc, dataFile);
     dataFile.close();
-    Serial.println("File created: " + filePath);
-    updateIndexJSON(filePath);
+    Serial.println("File created: " + fileName);
+    updateIndexJSON(fileName);
   } else {
     Serial.println("Error writing to SD card.");
   }
 }
 
 // ==== RS485 Data Reception ====
-void receiveRS485Data() {  
+void receiveRS485Data() {
   RS485_setReceive();
-  if (Serial2.available()) {  
-    String receivedData = Serial2.readStringUntil('\n');  
+  if (Serial2.available()) {
+    String receivedData = Serial2.readStringUntil('\n');
     receivedData.trim();
     if (receivedData.length() > 0) {
       Serial.println("Received data:");
@@ -200,8 +188,7 @@ void receiveRS485Data() {
 
 void setup() {
   Serial.begin(115200);
-  Serial2.begin(9600);  
-
+  Serial2.begin(9600);  // Arduino Pro Mini передає дані з 9600 біт/с
   pinMode(RS485_CONTROL, OUTPUT);
   RS485_setReceive();
   
@@ -225,7 +212,6 @@ void setup() {
   
   initTime();
   
-  // Налаштування статичних маршрутів для веб-сервера
   server.serveStatic("/styles", SD, "/System/styles");
   server.serveStatic("/js", SD, "/System/js");
   server.serveStatic("/libs", SD, "/System/libs");
