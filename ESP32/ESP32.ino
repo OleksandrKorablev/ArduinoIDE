@@ -20,7 +20,7 @@ WebServer server(80);
 
 // ==== Time & NTP Settings ====
 const char* ntpServer = "pool.ntp.org";
-const long  gmtOffset_sec = 3600;  
+const long  gmtOffset_sec = 3600;    // Налаштуйте згідно з вашим регіоном
 const int   daylightOffset_sec = 0;
 
 // ==== Web Server Handlers ====
@@ -109,10 +109,13 @@ void updateIndexJSON(String newFileName) {
   StaticJsonDocument<1024> doc;
   DeserializationError error = deserializeJson(doc, jsonString);
   if (error) {
+    // Якщо не вдалося прочитати index.json, ініціалізуємо порожній документ
     doc["files"] = JsonArray();
   }
   
   JsonArray files = doc["files"].as<JsonArray>();
+  
+  // Залишаємо лише ім'я файлу, без шляху
   int slashPos = newFileName.lastIndexOf('/');
   String simpleName = (slashPos != -1) ? newFileName.substring(slashPos + 1) : newFileName;
   
@@ -128,10 +131,11 @@ void updateIndexJSON(String newFileName) {
   }
 }
 
-// ==== Save Received RS485 Data to SD as JSON using ArduinoJson ====
+// ==== Save received RS485 data to SD as JSON using ArduinoJson ====
 void saveToSDCard(String data) {
-  // Формат очікуваних даних:
+  // Очікуваний формат даних:
   // "ID: ROOM_1 / Temperature: 10.8 / Humidity: 48.5 / CH₄: 99.35 / CO: 119.79 / Movement: NO"
+  // Розбираємо рядок вручну:
   String deviceID, temperature, humidity, CO, CH4, movement;
   int idStart = data.indexOf("ID: ") + 4;
   int tempStart = data.indexOf("/ Temperature: ") + 14;
@@ -149,7 +153,7 @@ void saveToSDCard(String data) {
   
   String timestamp = getCurrentTimestamp();
   
-  // Ім'я файлу у форматі: /System/DataFromMicrocontrollers/ROOM_1__2025-05-15_12-20-00.json
+  // Формуємо ім'я файлу; наприклад: /System/DataFromMicrocontrollers/ROOM_1__2025-05-15_12-20-00.json
   String fileName = "/System/DataFromMicrocontrollers/" + deviceID + "__" + timestamp + ".json";
   
   StaticJsonDocument<256> doc;
@@ -188,7 +192,7 @@ void receiveRS485Data() {
 
 void setup() {
   Serial.begin(115200);
-  Serial2.begin(9600);  // Arduino Pro Mini передає дані з 9600 біт/с
+  Serial2.begin(9600);  // Arduino Pro Mini передає дані на 9600 біт/с
   pinMode(RS485_CONTROL, OUTPUT);
   RS485_setReceive();
   
@@ -212,6 +216,7 @@ void setup() {
   
   initTime();
   
+  // Налаштування статичних маршрутів для веб-сервера
   server.serveStatic("/styles", SD, "/System/styles");
   server.serveStatic("/js", SD, "/System/js");
   server.serveStatic("/libs", SD, "/System/libs");
