@@ -1,66 +1,31 @@
-#include <ModbusMaster.h>
+#include <SoftwareSerial.h>
 #include <DHT.h>
 #include <math.h>
+#include <CSE_ArduinoRS485.h>  // Include RS485 library
 
-// ----- Налаштування для RS485/Modbus -----
-#define MODBUS_DIR_PIN     13       // Пін для керування напрямком (DE/RE) модуля MAX485
-#define MODBUS_SERIAL_BAUD 9600     // Швидкість передачі
-
-// ----- Налаштування сенсорів -----
-#define DHTPIN     10              // DHT22: DATA підключено до D10
-#define DHTTYPE    DHT22           // Тип DHT: DHT22
+// Connecting the DHT22 sensor
+#define DHTPIN 10
+#define DHTTYPE DHT22
 DHT dht(DHTPIN, DHTTYPE);
 
-#define PIRPIN     11              // PIR (HC-SR501): OUT підключено до D11
-#define MQ9Analog  A0              // MQ-9: аналоговий вихід AO підключено до A0
-#define MQ9Digital 12              // MQ-9: цифровий вихід (якщо потрібен)
+// Connecting the HC-SR501 (PIR) and MQ-9 sensor
+#define PIRPIN 11
+#define MQ9Analog A0
+#define MQ9Digital 12
 
-// ----- Унікальний ID цього мікроконтролера -----
-// Це значення буде передаватися разом із даними для ідентифікації джерела.
-#define MC_ID 101
+// Pin for controlling MAX485 operating modes (DE/RE)
+#define RS485_DE_PIN 13
 
-// ----- Об'єкт ModbusMaster -----
-// Зауваж, що тут ми задаємо ID цільового слейва (пристрій, до якого звертаємось).
-// Наприклад, якщо ESP32 налаштована як слейв з ID = 1, то:
-ModbusMaster modbusMaster;
+// Creating SoftwareSerial for RS485 (TX: pin 3, RX: pin 2)
+SoftwareSerial rs485Serial(2, 3);
 
-// Для керування напрямком передачі через MAX485 потрібні callback-функції:
-void preTransmission() {
-  digitalWrite(MODBUS_DIR_PIN, HIGH); // Увімкнути режим передачі
-}
+// Initializing the RS485 object by passing the serial port object and DE pin.
+// -1 indicates that the receive mode pin and alternate TX pin are not used.
+RS485Class rs485(rs485Serial, RS485_DE_PIN, -1, -1);
 
-void postTransmission() {
-  digitalWrite(MODBUS_DIR_PIN, LOW);  // Увімкнути режим прийому
-}
+const String DEVICE_ID = "ROOM_1";
 
-// Кількість регістрів, які ми будемо записувати в слейв-пристрій.
-// Регістр 0: температура (°C * 10)
-// Регістр 1: вологість (% * 10)
-// Регістр 2: значення CO (ppm)
-// Регістр 3: значення CH₄ (ppm)
-// Регістр 4: стан руху (0 або 1)
-// Регістр 5: ID мікроконтролера
-const uint16_t NUM_REGS = 6;
-
-void setup() {
-  // Налаштовуємо сенсорні піни
-  pinMode(PIRPIN, INPUT);
-  pinMode(MQ9Digital, INPUT);
-  pinMode(MODBUS_DIR_PIN, OUTPUT);
-  digitalWrite(MODBUS_DIR_PIN, LOW);  // Спочатку встановлюємо режим прийому
-
-  // Ініціалізуємо апаратний порт для RS485
-  Serial.begin(MODBUS_SERIAL_BAUD);
-  // Ініціалізуємо DHT22
-  dht.begin();
-
-  // Налаштовуємо ModbusMaster:
-  // Тут ми задаємо ID віддаленого слейва; наприклад, якщо ESP32 налаштована як слейв з ID = 1:
-  modbusMaster.begin(1, Serial);
-  modbusMaster.preTransmission(preTransmission);
-  modbusMaster.postTransmission(postTransmission);
-}
-
+// Function to calculate CO and CH₄ concentrations based on ADC values
 float getCOppm(int sensorValue) {
   float voltage = (sensorValue / 1023.0) * 5.0;
   float CO_ppm = pow((voltage / 5.0), -1.5) * 100;
@@ -73,45 +38,98 @@ float getCH4ppm(int sensorValue) {
   return CH4_ppm;
 }
 
+// Function to check the DHT22 sensor
+bool checkDHT22() {
+  float testTemp = dht.readTemperature();
+  float testHum  = dht.readHumidity();
+  return (!isnan(testTemp) && !isnan(testHum));
+}
+
+// Function to check the HC-SR501 sensor
+bool checkHC_SR501() {
+  int testPIR = digitalRead(PIRPIN);
+  // Since digitalRead returns HIGH or LOW, this function always returns true,
+  // but it's included for consistency.
+  return (testPIR == HIGH || testPIR == LOW);
+}
+
+// Function to check the MQ-9 sensor
+bool checkMQ9() {
+  int testAnalog = analogRead(MQ9Analog);
+  int testDigital = digitalRead(MQ9Digital);
+  return ((testAnalog >= 0 && testAnalog <= 1023) &&
+          (testDigital == HIGH || testDigital == LOW));
+}
+
+void setup() {
+  Serial.begin(9600);
+  rs485Serial.begin(9600);
+  
+  // RS485 initialization - the library automatically manages transmission/reception
+  // modes based on the parameters passed in the constructor.
+  
+  dht.begin();
+  pinMode(PIRPIN, INPUT);
+  pinMode(MQ9Digital, INPUT);
+  // If needed, you can explicitly set the analog input mode (usually not necessary)
+  pinMode(MQ9Analog, INPUT);
+
+  Serial.println("Checking sensor connections...");
+  bool dhtStatus = checkDHT22();
+  bool pirStatus = checkHC_SR501();
+  bool mq9Status = checkMQ9();
+
+  if (!dhtStatus)
+    Serial.println("DHT22 sensor NOT connected or not responding!");
+  else
+    Serial.println("DHT22 sensor successfully connected.");
+
+  if (!pirStatus)
+    Serial.println("HC-SR501 sensor NOT connected or not responding!");
+  else
+    Serial.println("HC-SR501 sensor successfully connected.");
+
+  if (!mq9Status)
+    Serial.println("MQ-9 sensor NOT connected or not responding!");
+  else
+    Serial.println("MQ-9 sensor successfully connected.");
+}
+
 void loop() {
-  uint8_t result;
-
-  // Зчитуємо дані з сенсорів
-  float temperature = dht.readTemperature();  // °C
-  float humidity    = dht.readHumidity();       // %
-  int mq9Raw = analogRead(MQ9Analog);             // сире значення з MQ-9
-
-  // Обчислюємо концентрації газів
-  float CO_ppm   = getCOppm(mq9Raw);
-  float CH4_ppm  = getCH4ppm(mq9Raw);
-  int motion     = (digitalRead(PIRPIN) == HIGH) ? 1 : 0;
-
-  // Масштабуємо значення для передачі:
-  // Для збереження десятинної точності температуру та вологість множимо на 10.
-  uint16_t reg0 = (uint16_t)(temperature * 10); // Наприклад, 10.8°C → 108
-  uint16_t reg1 = (uint16_t)(humidity * 10);    // Наприклад, 48.5% → 485
-  uint16_t reg2 = (uint16_t)CO_ppm;
-  uint16_t reg3 = (uint16_t)CH4_ppm;
-  uint16_t reg4 = (uint16_t)motion;
-  uint16_t reg5 = MC_ID;  // Додаємо ID мікроконтролера
-
-  // Розміщуємо дані в буфері для передачі:
-  modbusMaster.setTransmitBuffer(0, reg0);
-  modbusMaster.setTransmitBuffer(1, reg1);
-  modbusMaster.setTransmitBuffer(2, reg2);
-  modbusMaster.setTransmitBuffer(3, reg3);
-  modbusMaster.setTransmitBuffer(4, reg4);
-  modbusMaster.setTransmitBuffer(5, reg5);
-
-  // Виконуємо запис кількох регістрів (починаючи з адреси 0, кількість - 6) до слейва
-  result = modbusMaster.writeMultipleRegisters(0, NUM_REGS);
-
-  if (result == modbusMaster.ku8MBSuccess) {
-    Serial.println("Modbus write successful.");
+  // Reading sensor values
+  float temperature = dht.readTemperature();
+  float humidity = dht.readHumidity();
+  int mq9Raw = analogRead(MQ9Analog);
+  float CO_ppm = getCOppm(mq9Raw);
+  float CH4_ppm = getCH4ppm(mq9Raw);
+  bool motionDetected = (digitalRead(PIRPIN) == HIGH);
+  String movementStatus = motionDetected ? "YES" : "NO";
+  
+  // Constructing the message with the device ID and sensor data
+  String message = "ID: " + DEVICE_ID;
+  message += " / Temperature: " + String(temperature, 1);
+  message += " / Humidity: " + String(humidity, 1);
+  message += " / CH₄: " + String(CH4_ppm, 2);
+  message += " / CO: " + String(CO_ppm, 2);
+  message += " / Movement: " + movementStatus;
+  
+  Serial.println("Current sensor readings:");
+  Serial.println(message);
+  
+  // Sending data via RS485. Using the standard write() from the Stream class,
+  // then flush() ensures immediate UART transmission.
+  int bytesSent = rs485.write((uint8_t*)message.c_str(), message.length());
+  rs485.flush();
+  
+  if (bytesSent == message.length()) {
+    Serial.println("RS485 transmission successful.");
   } else {
-    Serial.print("Modbus write failed. Error: ");
-    Serial.println(result, HEX);
+    Serial.print("RS485 transmission error: Sent ");
+    Serial.print(bytesSent);
+    Serial.print(" bytes out of ");
+    Serial.print(message.length());
+    Serial.println(" bytes.");
   }
-
-  delay(1000); // Оновлення даних кожну секунду
+  
+  delay(1000); // Interval of 1 second
 }
