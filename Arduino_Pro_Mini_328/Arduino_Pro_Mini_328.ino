@@ -1,6 +1,4 @@
-#include <ArduinoRS485.h>    
 #include <ArduinoModbus.h>
-#include <SoftwareSerial.h>
 #include <DHT.h>
 #include <math.h>
 
@@ -14,14 +12,10 @@
 
 #define RS485_ENABLE_PIN 13
 
-#define RS485_RX_PIN     4
-#define RS485_TX_PIN     5
-
 #define DEVICE_ID       101
 #define NB_REG          6
 
 DHT dht(DHT_PIN, DHT_TYPE);
-SoftwareSerial RS485Serial(RS485_RX_PIN, RS485_TX_PIN);
 
 float getCOppm(int sensorValue) {
   float voltage = (sensorValue / 1023.0) * 5.0;
@@ -33,28 +27,37 @@ float getCH4ppm(int sensorValue) {
   return pow((voltage / 5.0), -1.8) * 80;
 }
 
+void preTransmission() {
+  digitalWrite(RS485_ENABLE_PIN, HIGH);
+}
+
+void postTransmission() {
+  digitalWrite(RS485_ENABLE_PIN, LOW);
+}
+
 void setup() {
   Serial.begin(9600);
   Serial.println("Modbus RTU Server starting...");
-
+  
   pinMode(RS485_ENABLE_PIN, OUTPUT);
   digitalWrite(RS485_ENABLE_PIN, LOW);
   pinMode(PIR_PIN, INPUT);
-
-  RS485Serial.begin(9600);
-
+  
   if (!ModbusRTUServer.begin(1, 9600)) {
     Serial.println("Failed to start Modbus RTU Server!");
     while (1);
   }
-
+  
   if (!ModbusRTUServer.configureHoldingRegisters(0, NB_REG)) {
     Serial.println("Failed to configure holding registers!");
     while (1);
   }
+  
   dht.begin();
-
   ModbusRTUServer.holdingRegisterWrite(5, DEVICE_ID);
+
+  ModbusRTUServer.onPreTransmission(preTransmission);
+  ModbusRTUServer.onPostTransmission(postTransmission);
   
   Serial.println("Modbus RTU Server (slave) started, holding registers configured.");
 }
@@ -74,13 +77,13 @@ void loop() {
   float CO_ppm = getCOppm(mqValue);
   float CH4_ppm = getCH4ppm(mqValue);
   int motion = digitalRead(PIR_PIN);
-
+  
   ModbusRTUServer.holdingRegisterWrite(0, (uint16_t)(temperature * 10));
-  ModbusRTUServer.holdingRegisterWrite(1, (uint16_t)(humidity * 10));  
-  ModbusRTUServer.holdingRegisterWrite(2, (uint16_t)(CO_ppm * 100));     
-  ModbusRTUServer.holdingRegisterWrite(3, (uint16_t)(CH4_ppm * 100));     
-  ModbusRTUServer.holdingRegisterWrite(4, (uint16_t)(motion ? 1 : 0));      
-
+  ModbusRTUServer.holdingRegisterWrite(1, (uint16_t)(humidity * 10));
+  ModbusRTUServer.holdingRegisterWrite(2, (uint16_t)(CO_ppm * 100));
+  ModbusRTUServer.holdingRegisterWrite(3, (uint16_t)(CH4_ppm * 100));
+  ModbusRTUServer.holdingRegisterWrite(4, (uint16_t)(motion ? 1 : 0));
+  
   ModbusRTUServer.poll();
   delay(1000);
 }
