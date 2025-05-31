@@ -35,28 +35,26 @@ float getCH4ppm(int sensorValue) {
 
 void setup() {
   Serial.begin(9600);
+  Serial.println("Modbus RTU Server starting...");
+
   pinMode(RS485_ENABLE_PIN, OUTPUT);
   digitalWrite(RS485_ENABLE_PIN, LOW);
   pinMode(PIR_PIN, INPUT);
 
   RS485Serial.begin(9600);
-  
+
   if (!ModbusRTUServer.begin(1, 9600)) {
     Serial.println("Failed to start Modbus RTU Server!");
     while (1);
   }
-  
+
   if (!ModbusRTUServer.configureHoldingRegisters(0, NB_REG)) {
     Serial.println("Failed to configure holding registers!");
     while (1);
   }
-  ModbusRTUServer.holdingRegisterWrite(5, DEVICE_ID);
-  
-  Serial.println("Modbus RTU Server (slave) started, waiting for master requests...");
-  dht.begin();
-}
 
-void loop() {
+  dht.begin();
+
   float temperature = dht.readTemperature();
   if (isnan(temperature)) {
     temperature = 0;
@@ -66,22 +64,24 @@ void loop() {
   if (isnan(humidity)) {
     humidity = 0;
   }
- 
+  
   int mqValue = analogRead(MQ9_ANALOG_PIN);
   float CO_ppm = getCOppm(mqValue);
   float CH4_ppm = getCH4ppm(mqValue);
- 
+  
   int motion = digitalRead(PIR_PIN);
+  
+  ModbusRTUServer.holdingRegisterWrite(0, (uint16_t)(temperature * 10));  
+  ModbusRTUServer.holdingRegisterWrite(1, (uint16_t)(humidity * 10));    
+  ModbusRTUServer.holdingRegisterWrite(2, (uint16_t)(CO_ppm * 100));      
+  ModbusRTUServer.holdingRegisterWrite(3, (uint16_t)(CH4_ppm * 100));      
+  ModbusRTUServer.holdingRegisterWrite(4, (uint16_t)(motion ? 1 : 0));     
+  ModbusRTUServer.holdingRegisterWrite(5, DEVICE_ID);                      
+  
+  Serial.println("Modbus RTU Server (slave) started, holding registers configured.");
+}
 
-  ModbusRTUServer.holdingRegisterWrite(0, (uint16_t)(temperature * 10));
-  ModbusRTUServer.holdingRegisterWrite(1, (uint16_t)(humidity * 10));
-  ModbusRTUServer.holdingRegisterWrite(2, (uint16_t)(CO_ppm * 100));
-  ModbusRTUServer.holdingRegisterWrite(3, (uint16_t)(CH4_ppm * 100));
-  ModbusRTUServer.holdingRegisterWrite(4, (uint16_t)(motion ? 1 : 0));
-  
-  int packetReceived = ModbusRTUServer.poll();
-  if (packetReceived)
-    Serial.println("Data transmitted successfully!");
-  
+void loop() {
+  ModbusRTUServer.poll();
   delay(1000);
 }
