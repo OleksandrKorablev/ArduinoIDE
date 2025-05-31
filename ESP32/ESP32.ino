@@ -3,7 +3,13 @@
 #include <SD.h>
 #include <ArduinoJson.h>
 #include <time.h>
+#include <WiFi.h>  
 
+// ===================== Wi-Fi Settings =====================
+const char* ssid = "zakatov";         // Ім'я мережі
+const char* password = "zaqxsw228";   // Пароль мережі
+
+// ===================== Modbus та SD =====================
 #define MAX485_DE_RE 13
 #define RXD2 16
 #define TXD2 17
@@ -93,6 +99,19 @@ void setup() {
 
   Serial.println("Initializing ESP32 Modbus RTU Master...");
 
+  // ===================== Wi-Fi підключення =====================
+  Serial.print("Connecting to Wi-Fi...");
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWi-Fi Connected!");
+  Serial.print("ESP32 Local IP Address: ");
+  Serial.println(WiFi.localIP());
+
+  // ===================== Modbus Init =====================
   pinMode(MAX485_DE_RE, OUTPUT);
   digitalWrite(MAX485_DE_RE, LOW);
 
@@ -101,11 +120,12 @@ void setup() {
   node.preTransmission(preTransmission);
   node.postTransmission(postTransmission);
 
+  // ===================== SD карта =====================
+  Serial.println("Initializing SD card...");
   if (!SD.begin(SD_CS)) {
     Serial.println("SD card initialization failed!");
-    while(1);
+    while (1);
   }
-
   Serial.println("SD card initialized.");
 
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
