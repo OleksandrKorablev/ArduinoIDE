@@ -1,4 +1,6 @@
-#include <ArduinoModbus.h>
+#include <ModbusADU.h>
+#include <ModbusSlaveLogic.h>
+#include <ModbusRTUComm.h>
 #include <DHT.h>
 #include <math.h>
 
@@ -6,13 +8,10 @@
 #define DHT_TYPE        DHT22
 
 #define MQ9_ANALOG_PIN  A0
-#define MQ9_DIGITAL_PIN 12
-
 #define PIR_PIN         11
+#define DEVICE_ID       101
 
 #define RS485_ENABLE_PIN 13
-
-#define DEVICE_ID       101
 #define NB_REG          6
 
 DHT dht(DHT_PIN, DHT_TYPE);
@@ -27,63 +26,61 @@ float getCH4ppm(int sensorValue) {
   return pow((voltage / 5.0), -1.8) * 80;
 }
 
-void preTransmission() {
-  digitalWrite(RS485_ENABLE_PIN, HIGH);
-}
+#define MODBUS_SERIAL   Serial
+#define MODBUS_BAUD     9600
+#define MODBUS_CONFIG   SERIAL_8N1
+#define MODBUS_UNIT_ID  1
 
-void postTransmission() {
-  digitalWrite(RS485_ENABLE_PIN, LOW);
-}
+const int16_t dePin = RS485_ENABLE_PIN;
+
+ModbusRTUComm rtuComm(MODBUS_SERIAL, dePin);
+ModbusSlaveLogic modbusLogic;
+
+const uint8_t numHoldingRegisters = NB_REG;
+uint16_t holdingRegisters[numHoldingRegisters];
 
 void setup() {
   Serial.begin(9600);
-  Serial.println("Modbus RTU Server starting...");
   
   pinMode(RS485_ENABLE_PIN, OUTPUT);
   digitalWrite(RS485_ENABLE_PIN, LOW);
   pinMode(PIR_PIN, INPUT);
   
-  if (!ModbusRTUServer.begin(1, 9600)) {
-    Serial.println("Failed to start Modbus RTU Server!");
-    while (1);
-  }
-  
-  if (!ModbusRTUServer.configureHoldingRegisters(0, NB_REG)) {
-    Serial.println("Failed to configure holding registers!");
-    while (1);
-  }
-  
   dht.begin();
-  ModbusRTUServer.holdingRegisterWrite(5, DEVICE_ID);
-
-  ModbusRTUServer.onPreTransmission(preTransmission);
-  ModbusRTUServer.onPostTransmission(postTransmission);
+  holdingRegisters[5] = DEVICE_ID;
+  modbusLogic.configureHoldingRegisters(holdingRegisters, numHoldingRegisters);
   
-  Serial.println("Modbus RTU Server (slave) started, holding registers configured.");
+  MODBUS_SERIAL.begin(MODBUS_BAUD, MODBUS_CONFIG);
+  rtuComm.begin(MODBUS_BAUD, MODBUS_CONFIG);
 }
 
 void loop() {
   float temperature = dht.readTemperature();
-  if (isnan(temperature)) {
-    temperature = 0;
-  }
+  if (isnan(temperature)) temperature = 0;
   
   float humidity = dht.readHumidity();
-  if (isnan(humidity)) {
-    humidity = 0;
-  }
+  if (isnan(humidity)) humidity = 0;
   
   int mqValue = analogRead(MQ9_ANALOG_PIN);
   float CO_ppm = getCOppm(mqValue);
   float CH4_ppm = getCH4ppm(mqValue);
   int motion = digitalRead(PIR_PIN);
   
-  ModbusRTUServer.holdingRegisterWrite(0, (uint16_t)(temperature * 10));
-  ModbusRTUServer.holdingRegisterWrite(1, (uint16_t)(humidity * 10));
-  ModbusRTUServer.holdingRegisterWrite(2, (uint16_t)(CO_ppm * 100));
-  ModbusRTUServer.holdingRegisterWrite(3, (uint16_t)(CH4_ppm * 100));
-  ModbusRTUServer.holdingRegisterWrite(4, (uint16_t)(motion ? 1 : 0));
+  holdingRegisters[0] = (uint16_t)(temperature * 10);
+  holdingRegisters[1] = (uint16_t)(humidity * 10);
+  holdingRegisters[2] = (uint16_t)(CO_ppm * 100);
+  holdingRegisters[3] = (uint16_t)(CH4_ppm * 100);
+  holdingRegisters[4] = (uint16_t)(motion ? 1 : 0);
   
-  ModbusRTUServer.poll();
+  ModbusADU adu;
+  uint8_t error = rtuComm.readAdu(adu);
+  if (error) { delay(10); return; }
+  
+  uint8_t unitId = adu.getUnitId();
+  if (unitId != MODBUS_UNIT_ID && unitId != 0) return;
+  
+  modbusLogic.processPdu(adu);
+  if (unitId != 0) rtuComm.writeAdu(adu);
+  
   delay(1000);
 }
