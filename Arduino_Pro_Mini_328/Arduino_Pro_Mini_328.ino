@@ -54,7 +54,7 @@ void loop() {
   ModbusRTUServer.holdingRegisterWrite(2, (uint16_t)(CO_ppm * 100));
   ModbusRTUServer.holdingRegisterWrite(3, (uint16_t)(CH4_ppm * 100));
   ModbusRTUServer.holdingRegisterWrite(4, motion ? 1 : 0);
-  
+  delay(1000);
   Serial.println("====== Current Sensor Readings ======");
   Serial.print("Temperature: ");
   Serial.print(temperature, 1);
