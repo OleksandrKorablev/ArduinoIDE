@@ -6,8 +6,8 @@
 #include <WiFi.h>  
 
 // ===================== Wi-Fi Settings =====================
-const char* ssid = "zakatov";         // Ім'я мережі
-const char* password = "zaqxsw228";   // Пароль мережі
+const char* ssid = "zakatov";         
+const char* password = "zaqxsw228";    
 
 // ===================== Modbus та SD =====================
 #define MAX485_DE_RE 13
