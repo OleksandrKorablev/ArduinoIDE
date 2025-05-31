@@ -10,7 +10,9 @@ DHT dht(DHTPIN, DHTTYPE);
 #define MQ9Analog A0
 #define MQ9Digital 12
 
-#define NB_REG 5
+#define NB_REG 6  // Тепер 6 регістрів, додали регістр для ID
+
+const uint16_t DEVICE_ID = 101;  // ID пристрою
 
 float getCOppm(int sensorValue) {
   float voltage = (sensorValue / 1023.0) * 5.0;
@@ -54,7 +56,10 @@ void loop() {
   ModbusRTUServer.holdingRegisterWrite(2, (uint16_t)(CO_ppm * 100));
   ModbusRTUServer.holdingRegisterWrite(3, (uint16_t)(CH4_ppm * 100));
   ModbusRTUServer.holdingRegisterWrite(4, motion ? 1 : 0);
-  delay(1000);
+  ModbusRTUServer.holdingRegisterWrite(5, DEVICE_ID);  // Записуємо ID пристрою у 5-й регістр
+  
+  delay(2000);
+  
   Serial.println("====== Current Sensor Readings ======");
   Serial.print("Temperature: ");
   Serial.print(temperature, 1);
@@ -70,9 +75,11 @@ void loop() {
   Serial.println(" ppm");
   Serial.print("Motion: ");
   Serial.println(motion ? "YES" : "NO");
+  Serial.print("Device ID: ");
+  Serial.println(DEVICE_ID);
   Serial.println("Data successfully updated in holding registers.");
   Serial.println("------------------------------------------");
   
   ModbusRTUServer.poll();
-  delay(1000);
+  delay(2000);
 }
