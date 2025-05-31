@@ -1,57 +1,37 @@
 #include <WiFi.h>
-#include <WebServer.h>
 #include <SPI.h>
 #include <SD.h>
 #include <ArduinoJson.h>
 #include "time.h"
+#include <ArduinoModbus.h>
 
 // ==== Wi-Fi Settings ====
 const char* ssid = "zakatov";
 const char* password = "zaqxsw228";
 
-// ==== RS485 Settings ====
-#define RS485_CONTROL 13
+// ==== RS485 & SD Settings ====
+#define RS485_CONTROL 13         // Пін для керування RS485 (при потребі)
+#define SD_CS 5                  // CS для SD-карти
 
-// ==== SD Card Configuration ====
-#define SD_CS 5
-WebServer server(80);
-
-// ==== Time & NTP Settings ====
+// ==== NTP / Часові налаштування ====
 const char* ntpServer = "pool.ntp.org";
-const long gmtOffset_sec = 3600;
-const int daylightOffset_sec = 0;
+const long gmtOffset_sec = 3600;        // GMT+1, наприклад
+const int daylightOffset_sec = 0; 
 
-// ==== Ініціалізація та вивід часу ====
+// ==== Ініціалізація часу через NTP ====
 void initTime() {
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   Serial.println("Synchronizing time...");
-  delay(2000); 
-  printLocalTime();
+  delay(2000); // невелика затримка для синхронізації
 }
 
-void printLocalTime() {
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo)) {
-    Serial.println("Failed to obtain time");
-    return;
-  }
-  Serial.print("Current time: ");
-  Serial.printf("%04d-%02d-%02d %02d:%02d:%02d\n", 
-                timeinfo.tm_year + 1900, 
-                timeinfo.tm_mon + 1, 
-                timeinfo.tm_mday, 
-                timeinfo.tm_hour, 
-                timeinfo.tm_min, 
-                timeinfo.tm_sec);
-}
-
-// ==== Get Current Timestamp ====
 String getCurrentTimestamp() {
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo)) {
     return "Unknown_Time";
   }
-  char buffer[20];
+  char buffer[25];
+  // Формат: YYYY-MM-DD_HH-MM-SS
   sprintf(buffer, "%04d-%02d-%02d_%02d-%02d-%02d",
           timeinfo.tm_year + 1900,
           timeinfo.tm_mon + 1,
@@ -62,120 +42,172 @@ String getCurrentTimestamp() {
   return String(buffer);
 }
 
-// ==== Web Server Handlers ====
-void handleRoot() {
-  if (SD.exists("/System/Authorization.html")) {
-    File authFile = SD.open("/System/Authorization.html", FILE_READ);
-    if (authFile) {
-      Serial.println("Streaming /System/Authorization.html...");
-      server.streamFile(authFile, "text/html");
-      authFile.close();
-    } else {
-      Serial.println("Error opening /System/Authorization.html!");
-      server.send(500, "text/html", "<h1>Error opening Authorization.html!</h1>");
-    }
-  } else {
-    server.send(404, "text/html", "<h1>Authorization page not found!</h1>");
+// ==== Функція запису JSON-файлу на SD-карту ====
+bool writeDataToSD(String folder, String filename, String jsonContent) {
+  String fullPath = folder + "/" + filename;
+  File file = SD.open(fullPath, FILE_WRITE);
+  if (!file) {
+    Serial.print("Failed to open file for writing: ");
+    Serial.println(fullPath);
+    return false;
   }
+  file.print(jsonContent);
+  file.close();
+  Serial.print("Data written to ");
+  Serial.println(fullPath);
+  return true;
 }
 
-void handleDataControllers() {
-  if (SD.exists("/System/DataControllers.html")) {
-    File dcFile = SD.open("/System/DataControllers.html", FILE_READ);
-    if (dcFile) {
-      Serial.println("Streaming /System/DataControllers.html...");
-      server.streamFile(dcFile, "text/html");
-      dcFile.close();
-    } else {
-      Serial.println("Error opening /System/DataControllers.html!");
-      server.send(500, "text/html", "<h1>Error opening DataControllers.html!</h1>");
+// ==== Функція оновлення index.JSON файлу ====
+bool updateIndexFile(String folder, String newFilename) {
+  String indexPath = folder + "/index.JSON";
+  DynamicJsonDocument doc(2048);
+  File file;
+  bool exists = SD.exists(indexPath);
+  
+  if (exists) {
+    file = SD.open(indexPath, FILE_READ);
+    if (!file) {
+      Serial.println("Failed to open index.JSON for reading.");
+      return false;
     }
-  } else {
-    server.send(404, "text/html", "<h1>DataControllers page not found!</h1>");
-  }
-}
-
-// ==== RS485 Helper Functions ====
-void RS485_setTransmit() {
-  digitalWrite(RS485_CONTROL, HIGH);
-}
-
-void RS485_setReceive() {
-  digitalWrite(RS485_CONTROL, LOW);
-}
-
-// ==== RS485 Data Reception ====
-void receiveRS485Data() {
-  RS485_setReceive();
-  if (Serial2.available()) {
-    String receivedData = Serial2.readStringUntil('\n');
-    receivedData.trim();
-    if (receivedData.length() > 0) {
-      Serial.println("Received data:");
-      Serial.println(receivedData);
-      // Тут можна додати обробку/збереження на SD, якщо потрібно
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
+    if (error) {
+      Serial.println("Failed to parse index.JSON, creating new document.");
+      doc.clear();
     }
   }
+  
+  // Якщо ключ "files" відсутній або не є масивом – створюємо масив
+  if (!doc.containsKey("files") || !doc["files"].is<JsonArray>()) {
+    doc["files"] = JsonArray();
+  }
+  JsonArray files = doc["files"];
+  files.add(newFilename);
+  
+  // Записуємо оновлений index.JSON
+  file = SD.open(indexPath, FILE_WRITE);
+  if (!file) {
+    Serial.println("Failed to open index.JSON for writing.");
+    return false;
+  }
+  serializeJsonPretty(doc, file);
+  file.close();
+  Serial.println("Index file updated.");
+  return true;
 }
+
+#define NUM_REGS 6  // Маємо 6 holding-регістрів
+
+// Таймер для періодичного зчитування даних (наприклад, кожні 5000 мс)
+unsigned long previousMillis = 0;
+unsigned long interval = 5000; 
 
 void setup() {
   Serial.begin(115200);
-  Serial2.begin(9600);  
+  
+  // Налаштування RS485: використаємо Serial2 для Modbus RTU (RS485)
+  Serial2.begin(9600, SERIAL_8N1);
   pinMode(RS485_CONTROL, OUTPUT);
-  RS485_setReceive();
-
-  // Wi-Fi
-  Serial.print("Connecting to Wi-Fi...");
+  digitalWrite(RS485_CONTROL, LOW); // Встановлюємо режим прийому
+  
+  // ==== Підключення до Wi‑Fi ====
+  Serial.println("Connecting to WiFi...");
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
-  Serial.println("\nWi-Fi Connected!");
-  Serial.print("ESP32 Local IP Address: ");
+  Serial.println("\nWiFi Connected!");
+  Serial.print("IP Address: ");
   Serial.println(WiFi.localIP());
-
-  // Час
-  initTime();   
-
-  // SD-карта
+  
+  // Ініціалізація SD картки
   Serial.println("Initializing SD card...");
   if (!SD.begin(SD_CS)) {
     Serial.println("SD card initialization failed!");
-    return;
+    while (1);
   }
   Serial.println("SD card initialized successfully.");
-
-  // Перевірка наявності HTML-файлів
-  if (SD.exists("/System/Authorization.html")) {
-    Serial.println("File /System/Authorization.html found.");
-  } else {
-    Serial.println("File /System/Authorization.html not found.");
+  
+  // Ініціалізація часу через NTP
+  initTime();
+  
+  // ==== Ініціалізація Modbus RTU слейва ====
+  // ESP32 налаштована як модбас‑слейв з ID = 1, приймає дані через Serial2
+  if (!ModbusRTUServer.begin(1, Serial2)) {
+    Serial.println("Failed to start Modbus RTU Slave!");
+    while (1);
   }
-  if (SD.exists("/System/DataControllers.html")) {
-    Serial.println("File /System/DataControllers.html found.");
-  } else {
-    Serial.println("File /System/DataControllers.html not found.");
+  // Реєструємо holding-регістри, що відповідають даним від Arduino Pro Mini
+  for (int i = 0; i < NUM_REGS; i++) {
+    ModbusRTUServer.addHreg(i, 0);
   }
-
-  // Static resources
-  server.serveStatic("/styles", SD, "/System/styles");
-  server.serveStatic("/js", SD, "/System/js");
-  server.serveStatic("/libs", SD, "/System/libs");
-  server.serveStatic("/Login_and_Password", SD, "/System/Login_and_Password");
-  server.serveStatic("/DataFromMicrocontrollers", SD, "/System/DataFromMicrocontrollers");
-
-  // Routes
-  server.on("/", HTTP_GET, handleRoot);
-  server.on("/DataControllers.html", HTTP_GET, handleDataControllers);
-
-  // Start server
-  server.begin();
-  Serial.println("HTTP server started.");
+  Serial.println("Modbus RTU Slave is running...");
 }
 
 void loop() {
-  server.handleClient();
-  receiveRS485Data();
+  // Обробка запитів Modbus
+  ModbusRTUServer.task();
+  
+  // Кожні interval мілісекунд читаємо holding-регістри та створюємо JSON
+  unsigned long currentMillis = millis();
+  if (currentMillis - previousMillis >= interval) {
+    previousMillis = currentMillis;
+    
+    // Зчитуємо дані з holding-регістрів (адреса 0–5)
+    uint16_t reg0 = ModbusRTUServer.hreg(0);
+    uint16_t reg1 = ModbusRTUServer.hreg(1);
+    uint16_t reg2 = ModbusRTUServer.hreg(2);
+    uint16_t reg3 = ModbusRTUServer.hreg(3);
+    uint16_t reg4 = ModbusRTUServer.hreg(4);
+    uint16_t reg5 = ModbusRTUServer.hreg(5);
+    
+    // Перетворюємо отримані значення:
+    // Температура і вологість були масштабовані на 10
+    float temperature = reg0 / 10.0;
+    float humidity    = reg1 / 10.0;
+    float CO          = reg2;  // ppm
+    float CH4         = reg3;  // ppm
+    bool motion       = (reg4 == 1);
+    int deviceIDNum   = reg5;  // наприклад, 101
+    
+    // Формуємо рядкове представлення ID, наприклад, "NODE_101"
+    String deviceIDStr = "ROOM_" + String(deviceIDNum);
+    
+    // Отримуємо поточний часовий штамп
+    String timestamp = getCurrentTimestamp();
+    
+    // Створюємо JSON-об’єкт із даними:
+    DynamicJsonDocument jsonDoc(512);
+    jsonDoc["deviceID"]    = deviceIDStr;
+    jsonDoc["timestamp"]   = timestamp;
+    jsonDoc["temperature"] = temperature;
+    jsonDoc["humidity"]    = humidity;
+    jsonDoc["motion"]      = motion;
+    jsonDoc["CO"]          = CO;
+    jsonDoc["CH4"]         = CH4;
+    
+    String jsonOutput;
+    serializeJsonPretty(jsonDoc, jsonOutput);
+    Serial.println("JSON data:");
+    Serial.println(jsonOutput);
+    
+    // Формуємо ім'я файлу, наприклад: "NODE_101__2025-05-15_12-20-00.json"
+    String filename = deviceIDStr + "__" + timestamp + ".json";
+    
+    // Встановлюємо папку для збереження файлів
+    String folder = "/System/DataFromMicrocontrollers";
+    if (!SD.exists(folder)) {
+      SD.mkdir(folder);
+    }
+    
+    // Записуємо JSON-дані у файл
+    if (writeDataToSD(folder, filename, jsonOutput)) {
+      // Оновлюємо файл-індекс
+      updateIndexFile(folder, filename);
+    }
+  }
 }
