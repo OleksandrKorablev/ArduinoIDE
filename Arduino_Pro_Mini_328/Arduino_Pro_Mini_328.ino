@@ -1,18 +1,27 @@
+#include <ArduinoRS485.h>    
 #include <ArduinoModbus.h>
+#include <SoftwareSerial.h>
 #include <DHT.h>
 #include <math.h>
 
-#define DHTPIN 10
-#define DHTTYPE DHT22
-DHT dht(DHTPIN, DHTTYPE);
+#define DHT_PIN         10
+#define DHT_TYPE        DHT22
 
-#define PIRPIN 11
-#define MQ9Analog A0
-#define MQ9Digital 12
+#define MQ9_ANALOG_PIN  A0
+#define MQ9_DIGITAL_PIN 12
 
-#define NB_REG 6  // Тепер 6 регістрів, додали регістр для ID
+#define PIR_PIN         11
 
-const uint16_t DEVICE_ID = 101;  // ID пристрою
+#define RS485_ENABLE_PIN 13
+
+#define RS485_RX_PIN     4
+#define RS485_TX_PIN     5
+
+#define DEVICE_ID       101
+#define NB_REG          6
+
+DHT dht(DHT_PIN, DHT_TYPE);
+SoftwareSerial RS485Serial(RS485_RX_PIN, RS485_TX_PIN);
 
 float getCOppm(int sensorValue) {
   float voltage = (sensorValue / 1023.0) * 5.0;
@@ -26,60 +35,53 @@ float getCH4ppm(int sensorValue) {
 
 void setup() {
   Serial.begin(9600);
-  while (!Serial) { }
-  Serial.println("Hello, world!");
-  
-  dht.begin();
-  pinMode(PIRPIN, INPUT);
-  pinMode(MQ9Analog, INPUT);
-  pinMode(MQ9Digital, INPUT);
+  pinMode(RS485_ENABLE_PIN, OUTPUT);
+  digitalWrite(RS485_ENABLE_PIN, LOW);
+  pinMode(PIR_PIN, INPUT);
+
+  RS485Serial.begin(9600);
   
   if (!ModbusRTUServer.begin(1, 9600)) {
     Serial.println("Failed to start Modbus RTU Server!");
     while (1);
   }
   
-  ModbusRTUServer.configureHoldingRegisters(0, NB_REG);
+  if (!ModbusRTUServer.configureHoldingRegisters(0, NB_REG)) {
+    Serial.println("Failed to configure holding registers!");
+    while (1);
+  }
+  ModbusRTUServer.holdingRegisterWrite(5, DEVICE_ID);
+  
   Serial.println("Modbus RTU Server (slave) started, waiting for master requests...");
+  dht.begin();
 }
 
 void loop() {
   float temperature = dht.readTemperature();
-  float humidity = dht.readHumidity();
-  int mq9Raw = analogRead(MQ9Analog);
-  float CO_ppm = getCOppm(mq9Raw);
-  float CH4_ppm = getCH4ppm(mq9Raw);
-  bool motion = (digitalRead(PIRPIN) == HIGH);
+  if (isnan(temperature)) {
+    temperature = 0;
+  }
   
+  float humidity = dht.readHumidity();
+  if (isnan(humidity)) {
+    humidity = 0;
+  }
+ 
+  int mqValue = analogRead(MQ9_ANALOG_PIN);
+  float CO_ppm = getCOppm(mqValue);
+  float CH4_ppm = getCH4ppm(mqValue);
+ 
+  int motion = digitalRead(PIR_PIN);
+
   ModbusRTUServer.holdingRegisterWrite(0, (uint16_t)(temperature * 10));
   ModbusRTUServer.holdingRegisterWrite(1, (uint16_t)(humidity * 10));
   ModbusRTUServer.holdingRegisterWrite(2, (uint16_t)(CO_ppm * 100));
   ModbusRTUServer.holdingRegisterWrite(3, (uint16_t)(CH4_ppm * 100));
-  ModbusRTUServer.holdingRegisterWrite(4, motion ? 1 : 0);
-  ModbusRTUServer.holdingRegisterWrite(5, DEVICE_ID);  // Записуємо ID пристрою у 5-й регістр
+  ModbusRTUServer.holdingRegisterWrite(4, (uint16_t)(motion ? 1 : 0));
   
-  delay(2000);
+  int packetReceived = ModbusRTUServer.poll();
+  if (packetReceived)
+    Serial.println("Data transmitted successfully!");
   
-  Serial.println("====== Current Sensor Readings ======");
-  Serial.print("Temperature: ");
-  Serial.print(temperature, 1);
-  Serial.println(" °C");
-  Serial.print("Humidity: ");
-  Serial.print(humidity, 1);
-  Serial.println(" %");
-  Serial.print("CO: ");
-  Serial.print(CO_ppm, 2);
-  Serial.println(" ppm");
-  Serial.print("CH4: ");
-  Serial.print(CH4_ppm, 2);
-  Serial.println(" ppm");
-  Serial.print("Motion: ");
-  Serial.println(motion ? "YES" : "NO");
-  Serial.print("Device ID: ");
-  Serial.println(DEVICE_ID);
-  Serial.println("Data successfully updated in holding registers.");
-  Serial.println("------------------------------------------");
-  
-  ModbusRTUServer.poll();
-  delay(2000);
+  delay(1000);
 }
