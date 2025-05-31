@@ -1,130 +1,190 @@
-#include <WiFi.h>
-#include <SPI.h>
+// Додаємо слабке визначення lwip_hook_ip6_input для вирішення лінкувальної помилки,
+// що виникає через IPv6. (Цей підхід вимикає обробку IPv6)
+extern "C" void lwip_hook_ip6_input(void) { }
+
+#include <HardwareSerial.h>
+#include <CSE_ArduinoRS485.h>
 #include <SD.h>
 #include <ArduinoJson.h>
 #include "time.h"
-#include <ArduinoModbus.h>
 
-// ==== Wi-Fi Settings ====
-const char* ssid = "zakatov";
-const char* password = "zaqxsw228";
+// ===== RS485 Settings =====
+#define RS485_DE_PIN 13   // Pin for controlling DE/RE signals
 
-// ==== RS485 & SD Settings ====
-#define RS485_CONTROL 13         // Пін для керування RS485 (при потребі)
-#define SD_CS 5                  // CS для SD-карти
+// ===== SD Card Settings =====
+#define SD_CS 5           // Chip select pin for SD card
 
-// ==== NTP / Часові налаштування ====
+// ===== Data Folder & Index File =====
+#define DATA_FOLDER "/System/DataFromMicrocontrollers"
+#define INDEX_FILE  "/System/DataFromMicrocontrollers/index.JSON"
+
+// ===== NTP Settings for Time Synchronization =====
 const char* ntpServer = "pool.ntp.org";
-const long gmtOffset_sec = 3600;        // GMT+1, наприклад
-const int daylightOffset_sec = 0; 
+const long  gmtOffset_sec = 3600;
+const int   daylightOffset_sec = 0;
 
-// ==== Ініціалізація часу через NTP ====
+// ===== Time Initialization =====
 void initTime() {
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   Serial.println("Synchronizing time...");
-  delay(2000); // невелика затримка для синхронізації
-}
-
-String getCurrentTimestamp() {
+  delay(2000);
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo)) {
-    return "Unknown_Time";
+    Serial.println("Failed to obtain time");
+  } else {
+    Serial.printf("Current time: %04d-%02d-%02d %02d:%02d:%02d\n",
+                  timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+                  timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
   }
+}
+
+// Returns timestamp for file naming in format "YYYY-MM-DD_HH_MM_SS"
+String getCurrentTimestampForFilename() {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) { return "Unknown_Time"; }
   char buffer[25];
-  // Формат: YYYY-MM-DD_HH-MM-SS
-  sprintf(buffer, "%04d-%02d-%02d_%02d-%02d-%02d",
-          timeinfo.tm_year + 1900,
-          timeinfo.tm_mon + 1,
-          timeinfo.tm_mday,
-          timeinfo.tm_hour,
-          timeinfo.tm_min,
-          timeinfo.tm_sec);
+  sprintf(buffer, "%04d-%02d-%02d_%02d_%02d_%02d",
+          timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+          timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
   return String(buffer);
 }
 
-// ==== Функція запису JSON-файлу на SD-карту ====
-bool writeDataToSD(String folder, String filename, String jsonContent) {
-  String fullPath = folder + "/" + filename;
-  File file = SD.open(fullPath, FILE_WRITE);
-  if (!file) {
-    Serial.print("Failed to open file for writing: ");
-    Serial.println(fullPath);
-    return false;
-  }
-  file.print(jsonContent);
-  file.close();
-  Serial.print("Data written to ");
-  Serial.println(fullPath);
-  return true;
+// Returns timestamp for JSON data in format "YYYY MM DD HH:MM:SS"
+String getCurrentTimestampForJSON() {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) { return "Unknown Time"; }
+  char buffer[25];
+  sprintf(buffer, "%04d %02d %02d %02d:%02d:%02d",
+          timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+          timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+  return String(buffer);
 }
 
-// ==== Функція оновлення index.JSON файлу ====
-bool updateIndexFile(String folder, String newFilename) {
-  String indexPath = folder + "/index.JSON";
-  DynamicJsonDocument doc(2048);
-  File file;
-  bool exists = SD.exists(indexPath);
+// ===== Processing Incoming RS485 Data =====
+// Expected input format:
+// "ID: ROOM_1 / Temperature: 22.5 / Humidity: 45 / CH₄: 1.2 / CO: 0.03 / Movement: NO"
+void processIncomingData(String data) {
+  data.trim();
+  if (data.length() == 0) return;
+
+  Serial.println("Received data:");
+  Serial.println(data);
   
-  if (exists) {
-    file = SD.open(indexPath, FILE_READ);
-    if (!file) {
-      Serial.println("Failed to open index.JSON for reading.");
-      return false;
+  // Split the string into tokens by " / "
+  const int expectedTokens = 6;
+  String tokens[expectedTokens];
+  int startIndex = 0;
+  int tokenIndex = 0;
+  
+  while (tokenIndex < expectedTokens) {
+    int delimIndex = data.indexOf(" / ", startIndex);
+    if (delimIndex == -1) {
+      tokens[tokenIndex] = data.substring(startIndex);
+      break;
+    } else {
+      tokens[tokenIndex] = data.substring(startIndex, delimIndex);
+      startIndex = delimIndex + 3;  // Skip past the delimiter " / "
+      tokenIndex++;
     }
-    DeserializationError error = deserializeJson(doc, file);
-    file.close();
-    if (error) {
-      Serial.println("Failed to parse index.JSON, creating new document.");
-      doc.clear();
+  }
+  
+  // Basic check: expect exactly 6 tokens
+  if (tokenIndex < expectedTokens - 1) {
+    Serial.println("Error: Incomplete data received.");
+    return;
+  }
+  
+  // Parse each token assuming the format "Key: Value"
+  String deviceID    = tokens[0].substring(tokens[0].indexOf(": ") + 2);
+  float temperature  = tokens[1].substring(tokens[1].indexOf(": ") + 2).toFloat();
+  float humidity     = tokens[2].substring(tokens[2].indexOf(": ") + 2).toFloat();
+  float ch4          = tokens[3].substring(tokens[3].indexOf(": ") + 2).toFloat();
+  float co           = tokens[4].substring(tokens[4].indexOf(": ") + 2).toFloat();
+  String movementStr = tokens[5].substring(tokens[5].indexOf(": ") + 2);
+  bool motion        = (movementStr.indexOf("YES") != -1);
+  
+  // Create a JSON document with sensor data and the current timestamp
+  // Використовуємо StaticJsonDocument для цього розділу:
+  StaticJsonDocument<256> doc;
+  doc["deviceID"]    = deviceID;
+  doc["timestamp"]   = getCurrentTimestampForJSON();
+  doc["temperature"] = temperature;
+  doc["humidity"]    = humidity;
+  doc["motion"]      = motion;
+  doc["CO"]          = co;
+  doc["CH4"]         = ch4;
+  
+  String jsonString;
+  serializeJson(doc, jsonString);
+  
+  // Generate a filename in the format: "DEVICEID__YYYY-MM-DD_HH_MM_SS.json"
+  String fileName = deviceID + "__" + getCurrentTimestampForFilename() + ".json";
+  String filePath = String(DATA_FOLDER) + "/" + fileName;
+  
+  // Save JSON data to the file on the SD card
+  File dataFile = SD.open(filePath.c_str(), FILE_WRITE);
+  if (dataFile) {
+    dataFile.println(jsonString);
+    dataFile.close();
+    Serial.print("Data saved to file: ");
+    Serial.println(filePath);
+  } else {
+    Serial.print("Error opening file for writing: ");
+    Serial.println(filePath);
+  }
+  
+  // ===== Update the Index File =====
+  String indexPath = INDEX_FILE;
+  DynamicJsonDocument indexDoc(1024);
+  
+  if (SD.exists(indexPath.c_str())) {
+    File indexFile = SD.open(indexPath.c_str(), FILE_READ);
+    if (indexFile) {
+      DeserializationError error = deserializeJson(indexDoc, indexFile);
+      indexFile.close();
+      if (error) {
+        Serial.println("Failed to read index JSON, creating new index.");
+        indexDoc.clear();
+        // Використаємо createNestedArray() з ключем "files"
+        indexDoc.createNestedArray("files");
+      }
     }
+  } else {
+    // Create a new index document if the file does not exist
+    indexDoc.createNestedArray("files");
   }
   
-  // Якщо ключ "files" відсутній або не є масивом – створюємо масив
-  if (!doc.containsKey("files") || !doc["files"].is<JsonArray>()) {
-    doc["files"] = JsonArray();
-  }
-  JsonArray files = doc["files"];
-  files.add(newFilename);
+  JsonArray filesArray = indexDoc["files"].as<JsonArray>();
+  filesArray.add(fileName);
   
-  // Записуємо оновлений index.JSON
-  file = SD.open(indexPath, FILE_WRITE);
-  if (!file) {
-    Serial.println("Failed to open index.JSON for writing.");
-    return false;
+  SD.remove(indexPath.c_str()); // Remove the old index file
+  File newIndexFile = SD.open(indexPath.c_str(), FILE_WRITE);
+  if (newIndexFile) {
+    serializeJson(indexDoc, newIndexFile);
+    newIndexFile.close();
+    Serial.println("Index file updated.");
+  } else {
+    Serial.println("Error writing index file.");
   }
-  serializeJsonPretty(doc, file);
-  file.close();
-  Serial.println("Index file updated.");
-  return true;
 }
 
-#define NUM_REGS 6  // Маємо 6 holding-регістрів
-
-// Таймер для періодичного зчитування даних (наприклад, кожні 5000 мс)
-unsigned long previousMillis = 0;
-unsigned long interval = 5000; 
+// ===== RS485 Reception Settings =====
+// Using ESP32 hardware serial (e.g., Serial2) with CSE_ArduinoRS485
+HardwareSerial RS485Serial(2);
+// Create the RS485 object with the proper constructor
+RS485Class rs485(RS485Serial, RS485_DE_PIN, -1, -1);
 
 void setup() {
   Serial.begin(115200);
   
-  // Налаштування RS485: використаємо Serial2 для Modbus RTU (RS485)
-  Serial2.begin(9600, SERIAL_8N1);
-  pinMode(RS485_CONTROL, OUTPUT);
-  digitalWrite(RS485_CONTROL, LOW); // Встановлюємо режим прийому
+  // Initialize RS485 serial using given RX and TX pins (example: RX – pin 16, TX – pin 17)
+  RS485Serial.begin(9600, SERIAL_8N1, 16, 17);
+  // (Бібліотека отримала параметри через конструктор – додатковий виклик rs485.begin() не потрібен)
   
-  // ==== Підключення до Wi‑Fi ====
-  Serial.println("Connecting to WiFi...");
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("\nWiFi Connected!");
-  Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP());
+  // Synchronize time via NTP
+  initTime();
   
-  // Ініціалізація SD картки
+  // Initialize SD card
   Serial.println("Initializing SD card...");
   if (!SD.begin(SD_CS)) {
     Serial.println("SD card initialization failed!");
@@ -132,82 +192,29 @@ void setup() {
   }
   Serial.println("SD card initialized successfully.");
   
-  // Ініціалізація часу через NTP
-  initTime();
-  
-  // ==== Ініціалізація Modbus RTU слейва ====
-  // ESP32 налаштована як модбас‑слейв з ID = 1, приймає дані через Serial2
-  if (!ModbusRTUServer.begin(1, Serial2)) {
-    Serial.println("Failed to start Modbus RTU Slave!");
-    while (1);
+  // Ensure the data folder exists on the SD card, otherwise create it
+  if (!SD.exists(DATA_FOLDER)) {
+    SD.mkdir(DATA_FOLDER);
+    Serial.print("Created folder: ");
+    Serial.println(DATA_FOLDER);
   }
-  // Реєструємо holding-регістри, що відповідають даним від Arduino Pro Mini
-  for (int i = 0; i < NUM_REGS; i++) {
-    ModbusRTUServer.addHreg(i, 0);
-  }
-  Serial.println("Modbus RTU Slave is running...");
 }
 
 void loop() {
-  // Обробка запитів Modbus
-  ModbusRTUServer.task();
+  // Use the RS485 library's receive() function (without arguments)
+  rs485.receive();
   
-  // Кожні interval мілісекунд читаємо holding-регістри та створюємо JSON
-  unsigned long currentMillis = millis();
-  if (currentMillis - previousMillis >= interval) {
-    previousMillis = currentMillis;
-    
-    // Зчитуємо дані з holding-регістрів (адреса 0–5)
-    uint16_t reg0 = ModbusRTUServer.hreg(0);
-    uint16_t reg1 = ModbusRTUServer.hreg(1);
-    uint16_t reg2 = ModbusRTUServer.hreg(2);
-    uint16_t reg3 = ModbusRTUServer.hreg(3);
-    uint16_t reg4 = ModbusRTUServer.hreg(4);
-    uint16_t reg5 = ModbusRTUServer.hreg(5);
-    
-    // Перетворюємо отримані значення:
-    // Температура і вологість були масштабовані на 10
-    float temperature = reg0 / 10.0;
-    float humidity    = reg1 / 10.0;
-    float CO          = reg2;  // ppm
-    float CH4         = reg3;  // ppm
-    bool motion       = (reg4 == 1);
-    int deviceIDNum   = reg5;  // наприклад, 101
-    
-    // Формуємо рядкове представлення ID, наприклад, "NODE_101"
-    String deviceIDStr = "ROOM_" + String(deviceIDNum);
-    
-    // Отримуємо поточний часовий штамп
-    String timestamp = getCurrentTimestamp();
-    
-    // Створюємо JSON-об’єкт із даними:
-    DynamicJsonDocument jsonDoc(512);
-    jsonDoc["deviceID"]    = deviceIDStr;
-    jsonDoc["timestamp"]   = timestamp;
-    jsonDoc["temperature"] = temperature;
-    jsonDoc["humidity"]    = humidity;
-    jsonDoc["motion"]      = motion;
-    jsonDoc["CO"]          = CO;
-    jsonDoc["CH4"]         = CH4;
-    
-    String jsonOutput;
-    serializeJsonPretty(jsonDoc, jsonOutput);
-    Serial.println("JSON data:");
-    Serial.println(jsonOutput);
-    
-    // Формуємо ім'я файлу, наприклад: "NODE_101__2025-05-15_12-20-00.json"
-    String filename = deviceIDStr + "__" + timestamp + ".json";
-    
-    // Встановлюємо папку для збереження файлів
-    String folder = "/System/DataFromMicrocontrollers";
-    if (!SD.exists(folder)) {
-      SD.mkdir(folder);
+  // Check available data and read it as a String
+  if (rs485.available() > 0) {
+    String receivedData = "";
+    while (rs485.available() > 0) {
+      receivedData += (char)rs485.read();
     }
-    
-    // Записуємо JSON-дані у файл
-    if (writeDataToSD(folder, filename, jsonOutput)) {
-      // Оновлюємо файл-індекс
-      updateIndexFile(folder, filename);
+    receivedData.trim();
+    if (receivedData.length() > 0) {
+      processIncomingData(receivedData);
     }
   }
+  
+  delay(100);  // Small delay to avoid saturating the loop
 }
