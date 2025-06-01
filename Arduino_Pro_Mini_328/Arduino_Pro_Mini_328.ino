@@ -9,9 +9,9 @@
 
 #define MQ9_ANALOG_PIN  A0
 #define PIR_PIN         11
-#define DEVICE_ID       101
-
 #define RS485_ENABLE_PIN 13
+
+#define DEVICE_ID       101
 #define NB_REG          6
 
 DHT dht(DHT_PIN, DHT_TYPE);
