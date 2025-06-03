@@ -1,105 +1,57 @@
-#include <ModbusMaster.h>
+#include <WiFi.h>
+#include <WebServer.h>
 #include <SPI.h>
 #include <SD.h>
-#include <ArduinoJson.h>
+#include <ModbusMaster.h>
 #include <time.h>
-#include <WiFi.h>  
+#include <ArduinoJson.h>
 
 // ===================== Wi-Fi Settings =====================
-const char* ssid = "zakatov";         
-const char* password = "zaqxsw228";    
+const char* ssid = "zakatov";        
+const char* password = "zaqxsw228";   
 
-// ===================== Modbus та SD =====================
-#define MAX485_DE_RE 13
-#define RXD2 16
-#define TXD2 17
-#define SD_CS 5
+// ===================== SD Card Configuration =====================
+#define SD_CS 5  // Pin for SD module Chip Select
 
-ModbusMaster node;
+// ===================== RS485 & Modbus Settings =====================
+#define RS485_DE_RE 13  // Pin for controlling DE/RE (MAX485)
+#define RS485_RX 16     // ESP32 pin connected to MAX485 RO
+#define RS485_TX 17     // ESP32 pin connected to MAX485 DI
+#define MODBUS_BAUD 9600
+#define MODBUS_UNIT_ID 1  // ID of Arduino Pro Mini (slave)
 
+// ===================== HTTP Server =====================
+WebServer server(80);
+
+// ===================== Modbus & RS485 =====================
+ModbusMaster modbusMaster;
+HardwareSerial RS485Serial(2); 
+
+// Callback functions for RS485 transmission control
 void preTransmission() {
-  digitalWrite(MAX485_DE_RE, HIGH);
+  digitalWrite(RS485_DE_RE, HIGH);
 }
-
 void postTransmission() {
-  digitalWrite(MAX485_DE_RE, LOW);
+  digitalWrite(RS485_DE_RE, LOW);
 }
 
-String getCurrentTimestamp() {
-  time_t now = time(nullptr);
-  struct tm* timeinfo = localtime(&now);
-  char buffer[20];
-  strftime(buffer, sizeof(buffer), "%Y-%m-%d_%H-%M-%S", timeinfo);
-  return String(buffer);
-}
-
-String getFormattedTimestampForJson() {
-  time_t now = time(nullptr);
-  struct tm* timeinfo = localtime(&now);
+// Function to obtain current time as a formatted string ("YYYY-MM-DD_HH_MM_SS")
+String getFormattedTime() {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    Serial.println("Failed to obtain time");
+    return "0000-00-00_00_00_00";
+  }
   char buffer[25];
-  strftime(buffer, sizeof(buffer), "%Y %m %d %H:%M:%S", timeinfo);
+  strftime(buffer, sizeof(buffer), "%Y-%m-%d_%H_%M_%S", &timeinfo);
   return String(buffer);
-}
-
-void saveJsonToFile(String deviceID, float temperature, float humidity, bool motion, float CO, float CH4) {
-  String fileTimestamp = getCurrentTimestamp();
-  String jsonTimestamp = getFormattedTimestampForJson();
-
-  String fileName = deviceID + "__" + fileTimestamp + ".json";
-  String fullPath = "/System/DataFromMicrocontrollers/" + fileName;
-
-  StaticJsonDocument<256> doc;
-  doc["deviceID"] = deviceID;
-  doc["timestamp"] = jsonTimestamp;
-  doc["temperature"] = temperature;
-  doc["humidity"] = humidity;
-  doc["motionDetected"] = motion;
-  doc["CO"] = CO;
-  doc["CH4"] = CH4;
-
-  File file = SD.open(fullPath, FILE_WRITE);
-  if (file) {
-    serializeJsonPretty(doc, file);
-    file.close();
-    Serial.println("Saved JSON to: " + fullPath);
-  } else {
-    Serial.println("Failed to save JSON to: " + fullPath);
-  }
-}
-
-void readModbusData() {
-  uint8_t result = node.readHoldingRegisters(0x00, 6);
-  if (result != node.ku8MBSuccess) {
-    Serial.println("Modbus read error");
-    return;
-  }
-
-  float temperature = node.getResponseBuffer(0) / 10.0;
-  float humidity = node.getResponseBuffer(1) / 10.0;
-  float CO = node.getResponseBuffer(2) / 100.0;
-  float CH4 = node.getResponseBuffer(3) / 100.0;
-  bool motion = node.getResponseBuffer(4) == 1;
-  uint16_t deviceID_num = node.getResponseBuffer(5);
-  String deviceID = "NODE_" + String(deviceID_num);
-
-  Serial.printf("Received data from %s:\n", deviceID.c_str());
-  Serial.printf("  Temperature: %.1f °C\n", temperature);
-  Serial.printf("  Humidity: %.1f %%\n", humidity);
-  Serial.printf("  CO: %.2f ppm\n", CO);
-  Serial.printf("  CH4: %.2f ppm\n", CH4);
-  Serial.printf("  Motion detected: %s\n", motion ? "YES" : "NO");
-  Serial.println("-------------------------------");
-
-  saveJsonToFile(deviceID, temperature, humidity, motion, CO, CH4);
 }
 
 void setup() {
-  Serial.begin(9600);
-  delay(1000);
+  Serial.begin(115200);
+  delay(100);
 
-  Serial.println("Initializing ESP32 Modbus RTU Master...");
-
-  // ===================== Wi-Fi підключення =====================
+  // ===================== Wi-Fi =====================
   Serial.print("Connecting to Wi-Fi...");
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
@@ -107,40 +59,203 @@ void setup() {
     delay(500);
     Serial.print(".");
   }
-  Serial.println("\nWi-Fi Connected!");
+  Serial.println("\nWi-Fi connected!");
   Serial.print("ESP32 Local IP Address: ");
   Serial.println(WiFi.localIP());
 
-  // ===================== Modbus Init =====================
-  pinMode(MAX485_DE_RE, OUTPUT);
-  digitalWrite(MAX485_DE_RE, LOW);
+  // ===================== Obtain Time via NTP =====================
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  struct tm timeinfo;
+  if (getLocalTime(&timeinfo)) {
+    Serial.print("Current time: ");
+    Serial.println(getFormattedTime());
+  } else {
+    Serial.println("Unable to get current time");
+  }
 
-  Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
-  node.begin(1, Serial2);
-  node.preTransmission(preTransmission);
-  node.postTransmission(postTransmission);
-
-  // ===================== SD карта =====================
+  // ===================== SD Card =====================
   Serial.println("Initializing SD card...");
   if (!SD.begin(SD_CS)) {
     Serial.println("SD card initialization failed!");
-    while (1);
+    return;
   }
-  Serial.println("SD card initialized.");
+  Serial.println("SD card initialized successfully.");
 
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-  Serial.println("Waiting for time sync...");
-  delay(3000);
+  // Check for essential files
+  if (SD.exists("/System/Authorization.html"))
+    Serial.println("File /System/Authorization.html found.");
+  else
+    Serial.println("File /System/Authorization.html not found.");
+  if (SD.exists("/System/DataControllers.html"))
+    Serial.println("File /System/DataControllers.html found.");
+  else
+    Serial.println("File /System/DataControllers.html not found.");
 
-  if (!SD.exists("/System")) {
-    SD.mkdir("/System");
-  }
-  if (!SD.exists("/System/DataFromMicrocontrollers")) {
-    SD.mkdir("/System/DataFromMicrocontrollers");
+  // ===================== HTTP Server =====================
+  server.serveStatic("/styles", SD, "/System/styles");
+  server.serveStatic("/js", SD, "/System/js");
+  server.serveStatic("/libs", SD, "/System/libs");
+  server.serveStatic("/Login_and_Password", SD, "/System/Login_and_Password");
+  server.serveStatic("/DataFromMicrocontrollers", SD, "/System/DataFromMicrocontrollers");
+
+  server.on("/", HTTP_GET, []() {
+    if (SD.exists("/System/Authorization.html")) {
+      File authFile = SD.open("/System/Authorization.html", FILE_READ);
+      if (authFile) {
+        Serial.println("Streaming /System/Authorization.html...");
+        server.streamFile(authFile, "text/html");
+        authFile.close();
+      } else {
+        Serial.println("Error opening /System/Authorization.html!");
+        server.send(500, "text/html", "<h1>Error opening Authorization page!</h1>");
+      }
+    } else {
+      server.send(404, "text/html", "<h1>Authorization page not found!</h1>");
+    }
+  });
+
+  server.on("/DataControllers.html", HTTP_GET, []() {
+    if (SD.exists("/System/DataControllers.html")) {
+      File dcFile = SD.open("/System/DataControllers.html", FILE_READ);
+      if (dcFile) {
+        Serial.println("Streaming /System/DataControllers.html...");
+        server.streamFile(dcFile, "text/html");
+        dcFile.close();
+      } else {
+        Serial.println("Error opening /System/DataControllers.html!");
+        server.send(500, "text/html", "<h1>Error opening DataControllers.html!</h1>");
+      }
+    } else {
+      server.send(404, "text/html", "<h1>DataControllers page not found!</h1>");
+    }
+  });
+
+  server.begin();
+  Serial.println("HTTP server started.");
+
+  // ===================== RS485 and Modbus =====================
+  pinMode(RS485_DE_RE, OUTPUT);
+  digitalWrite(RS485_DE_RE, LOW); // Default to receive mode
+  RS485Serial.begin(MODBUS_BAUD, SERIAL_8N1, RS485_RX, RS485_TX);
+
+  modbusMaster.begin(MODBUS_UNIT_ID, RS485Serial);
+  modbusMaster.preTransmission(preTransmission);
+  modbusMaster.postTransmission(postTransmission);
+
+  // Test Modbus connection with Arduino Pro Mini
+  Serial.println("Attempting Modbus connection with Arduino Pro Mini...");
+  uint8_t result = modbusMaster.readHoldingRegisters(0, 6);
+  if (result == modbusMaster.ku8MBSuccess)
+    Serial.println("Successfully connected to Arduino Pro Mini.");
+  else {
+    Serial.print("Failed to connect to Arduino Pro Mini. Error code: ");
+    Serial.println(result, DEC);
   }
 }
 
 void loop() {
-  readModbusData();
-  delay(10000);
+  server.handleClient();  
+
+  static unsigned long previousMillis = 0;
+  unsigned long currentMillis = millis();
+  // Poll every 15 seconds (15000 ms)
+  if (currentMillis - previousMillis >= 15000) {
+    previousMillis = currentMillis;
+
+    uint8_t result = modbusMaster.readHoldingRegisters(0, 6);
+    if (result == modbusMaster.ku8MBSuccess) {
+      Serial.println("Data successfully read from Holding Registers");
+
+      // Read raw data from registers
+      uint16_t rawTemperature = modbusMaster.getResponseBuffer(0);
+      uint16_t rawHumidity    = modbusMaster.getResponseBuffer(1);
+      uint16_t rawCO          = modbusMaster.getResponseBuffer(2);
+      uint16_t rawCH4         = modbusMaster.getResponseBuffer(3);
+      uint16_t rawMotion      = modbusMaster.getResponseBuffer(4);
+      uint16_t deviceId       = modbusMaster.getResponseBuffer(5);
+
+      // Normalize data (restore actual values)
+      float temperature = rawTemperature / 10.0; 
+      float humidity    = rawHumidity / 10.0;     
+      float CO_ppm      = rawCO / 100.0;        
+      float CH4_ppm     = rawCH4 / 100.0;       
+      int motion = rawMotion; 
+
+      Serial.print("Temperature: "); Serial.println(temperature);
+      Serial.print("Humidity: "); Serial.println(humidity);
+      Serial.print("CO (ppm): "); Serial.println(CO_ppm);
+      Serial.print("CH4 (ppm): "); Serial.println(CH4_ppm);
+      Serial.print("Motion: "); Serial.println(motion);
+      Serial.print("Device ID: "); Serial.println(deviceId);
+
+      // Get current time for filename
+      String timestamp = getFormattedTime();
+
+      // Create JSON object (using ArduinoJson library)
+      StaticJsonDocument<256> doc;
+      doc["deviceID"]    = deviceId;
+      doc["timestamp"]   = timestamp;
+      doc["temperature"] = temperature;
+      doc["humidity"]    = humidity;
+      doc["CO_ppm"]      = CO_ppm;
+      doc["CH4_ppm"]     = CH4_ppm;
+      doc["motion"]      = motion;
+
+      String jsonString;
+      serializeJson(doc, jsonString);
+
+      // Form filename "NODE_<deviceID>__<timestamp>.json"
+      String fileName = "/System/DataFromMicrocontrollers/NODE_" + String(deviceId) + "__" + timestamp + ".json";
+
+      // Write JSON data to file on SD card
+      File dataFile = SD.open(fileName, FILE_WRITE);
+      if (dataFile) {
+        dataFile.println(jsonString);
+        dataFile.close();
+        Serial.println("Data successfully saved to file " + fileName);
+      } else {
+        Serial.println("Failed to open file for writing: " + fileName);
+      }
+
+      // Update index.json which contains the list of created files
+      String indexPath = "/System/DataFromMicrocontrollers/index.json";
+      DynamicJsonDocument indexDoc(512);
+
+      // If index.json exists, read its contents
+      if (SD.exists(indexPath)) {
+        File indexFile = SD.open(indexPath, FILE_READ);
+        if (indexFile) {
+          DeserializationError error = deserializeJson(indexDoc, indexFile);
+          if (error) {
+            Serial.print("Error deserializing index.json: ");
+            Serial.println(error.f_str());
+            indexDoc.clear();
+            indexDoc["files"] = JsonArray();
+          }
+          indexFile.close();
+        }
+      } else {
+        indexDoc["files"] = JsonArray();
+      }
+
+      // Add new filename to the array
+      JsonArray files = indexDoc["files"].as<JsonArray>();
+      int lastSlash = fileName.lastIndexOf('/');
+      String shortFileName = fileName.substring(lastSlash + 1);  
+      files.add(shortFileName);
+
+      // Write the updated index.json to SD card
+      File indexFile = SD.open(indexPath, FILE_WRITE);
+      if (indexFile) {
+        serializeJsonPretty(indexDoc, indexFile);
+        indexFile.close();
+        Serial.println("index.json updated.");
+      } else {
+        Serial.println("Failed to open index.json for writing.");
+      }
+    } else {
+      Serial.print("Failed to read data from Holding Registers. Error code: ");
+      Serial.println(result, DEC);
+    }
+  }
 }
