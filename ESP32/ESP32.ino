@@ -20,8 +20,7 @@ WebServer server(80);
 #define MODBUS_CONFIG SERIAL_8N1
 #define SLAVE_ID 1
 
-HardwareSerial RS485Serial(2);
-ModbusRTUMaster modbus(RS485Serial, RS485_RE_DE_PIN);
+ModbusRTUMaster modbus(Serial2, RS485_RE_DE_PIN);
 
 // ===================== File Paths =====================
 const char* DATA_FOLDER = "/System/DataFromMicrocontrollers";
@@ -32,7 +31,11 @@ const char* ntpServer = "pool.ntp.org";
 const long gmtOffset_sec = 7200;
 const int daylightOffset_sec = 3600;
 
-// ===================== Time Formatting Function =====================
+// ===================== Global Variables for Modbus Data =====================
+const uint8_t numberOfRegisters = 6;
+uint16_t sensorData[numberOfRegisters] = {0};
+
+// ===================== Function: Get Formatted Current Time =====================
 String getCurrentFormattedTime() {
   time_t now;
   struct tm timeInfo;
@@ -54,7 +57,7 @@ String getCurrentFormattedTime() {
   return String(timeString);
 }
 
-// ===================== Update Index File Function =====================
+// ===================== Function: Update Index File =====================
 void updateIndexFile(const String &newFileName) {
   String indexContent = "";
   if (SD.exists(INDEX_FILE)) {
@@ -90,7 +93,7 @@ void updateIndexFile(const String &newFileName) {
   }
 }
 
-// ===================== Setup for Wi-Fi, SD and Web Server =====================
+// ===================== Setup for Wi-Fi, SD & Web Server =====================
 void setupWebAndStorage() {
   Serial.println("Connecting to Wi-Fi...");
   WiFi.mode(WIFI_STA);
@@ -172,11 +175,12 @@ void setupTime() {
 
 // ===================== Setup for RS485 and Modbus =====================
 void setupModbus() {
-  RS485Serial.begin(MODBUS_BAUD, MODBUS_CONFIG, 16, 17);
+  Serial2.begin(MODBUS_BAUD, MODBUS_CONFIG, 16, 17);
   modbus.begin(MODBUS_BAUD, MODBUS_CONFIG);
   Serial.println("Modbus RTU master initialized on RS485.");
 }
 
+// ===================== Main Setup =====================
 void setup() {
   Serial.begin(115200);
   delay(100);
@@ -185,11 +189,10 @@ void setup() {
   setupModbus();
 }
 
+// ===================== Main Loop =====================
 void loop() {
   server.handleClient();
   
-  const uint8_t numberOfRegisters = 6;
-  uint16_t sensorData[numberOfRegisters] = {0};
   uint8_t error = modbus.readHoldingRegisters(SLAVE_ID, 0, sensorData, numberOfRegisters);
   
   if (error == 0) {
@@ -200,7 +203,7 @@ void loop() {
     float CH4_ppm     = sensorData[3] / 100.0;
     uint16_t motion   = sensorData[4];
     uint16_t deviceID = sensorData[5];
-
+    
     // ===================== Create JSON Data =====================
     StaticJsonDocument<200> doc;
     doc["temperature"] = temperature;
