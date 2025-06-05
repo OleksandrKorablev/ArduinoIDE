@@ -93,9 +93,11 @@ void updateIndexFile(const String &newFileName) {
   }
 }
 
+
+
 // ===================== Setup for Wi-Fi, SD & Web Server =====================
 void setupWebAndStorage() {
-  Serial.print("Connecting to Wi-Fi...");
+  Serial.println("Connecting to Wi-Fi...");
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
@@ -103,34 +105,35 @@ void setupWebAndStorage() {
     Serial.print(".");
   }
   Serial.println("\nWi-Fi Connected!");
-  Serial.print("ESP32 Local IP Address: ");
+  Serial.print("ESP32 Local IP: ");
   Serial.println(WiFi.localIP());
-
+  
+  SPI.begin(18, 19, 23, 5);
+  delay(100);
+  
   Serial.println("Initializing SD card...");
-  if (!SD.begin(SD_CS)) 
-  {
+  if (!SD.begin(SD_CS)) {
     Serial.println("SD card initialization failed!");
     return;
   }
   Serial.println("SD card initialized successfully.");
-
-  if (SD.exists("/System/Authorization.html")) {
+  
+  if (SD.exists("/System/Authorization.html"))
     Serial.println("File /System/Authorization.html found.");
-  } else {
-    Serial.println("File /System/Authorization.html not found.");
-  }
-  if (SD.exists("/System/DataControllers.html")) {
+  else
+    Serial.println("File /System/Authorization.html not found!");
+  
+  if (SD.exists("/System/DataControllers.html"))
     Serial.println("File /System/DataControllers.html found.");
-  } else {
-    Serial.println("File /System/DataControllers.html not found.");
-  }
-
+  else
+    Serial.println("File /System/DataControllers.html not found!");
+  
   server.serveStatic("/styles", SD, "/System/styles");
   server.serveStatic("/js", SD, "/System/js");
   server.serveStatic("/libs", SD, "/System/libs");
   server.serveStatic("/Login_and_Password", SD, "/System/Login_and_Password");
   server.serveStatic("/DataFromMicrocontrollers", SD, DATA_FOLDER);
-
+  
   server.on("/", HTTP_GET, []() {
     if (SD.exists("/System/Authorization.html")) {
       File authFile = SD.open("/System/Authorization.html", FILE_READ);
@@ -146,7 +149,7 @@ void setupWebAndStorage() {
       server.send(404, "text/html", "<h1>Authorization page not found!</h1>");
     }
   });
-
+  
   server.on("/DataControllers.html", HTTP_GET, []() {
     if (SD.exists("/System/DataControllers.html")) {
       File dcFile = SD.open("/System/DataControllers.html", FILE_READ);
@@ -162,7 +165,7 @@ void setupWebAndStorage() {
       server.send(404, "text/html", "<h1>DataControllers page not found!</h1>");
     }
   });
-
+  
   server.begin();
   Serial.println("HTTP server started.");
 }
