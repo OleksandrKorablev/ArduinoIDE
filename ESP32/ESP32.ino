@@ -93,8 +93,6 @@ void updateIndexFile(const String &newFileName) {
   }
 }
 
-
-
 // ===================== Setup for Wi-Fi, SD & Web Server =====================
 void setupWebAndStorage() {
   Serial.println("Connecting to Wi-Fi...");
