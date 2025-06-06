@@ -93,6 +93,8 @@ void updateIndexFile(const String &newFileName) {
   }
 }
 
+
+
 // ===================== Setup for Wi-Fi, SD & Web Server =====================
 void setupWebAndStorage() {
   Serial.println("Connecting to Wi-Fi...");
@@ -206,7 +208,7 @@ void loop() {
     float CH4         = sensorData[3] / 10000.0;
     uint16_t motion   = sensorData[4];
     uint16_t devID    = sensorData[5];
-    String device = "NODE_" + String(devID);
+    String device = "ROOM_" + String(devID);
     
     // ===================== Create JSON Data =====================
     StaticJsonDocument<256> doc;
