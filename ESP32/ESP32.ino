@@ -202,27 +202,30 @@ void loop() {
   
   if (error == 0) {
     Serial.println("Successfully read data from Holding Registers");
-    float temperature = sensorData[0] / 10.0;
+    float temperature = sensorData[0] / 1000.0;
     float humidity    = sensorData[1] / 10.0;
-    float CO_ppm      = sensorData[2] / 100.0;
-    float CH4_ppm     = sensorData[3] / 100.0;
+    float CO          = sensorData[2] / 10000.0;
+    float CH4         = sensorData[3] / 10000.0;
     uint16_t motion   = sensorData[4];
-    uint16_t deviceID = sensorData[5];
+    uint16_t devID    = sensorData[5];
+    String device = "NODE_" + String(devID);
     
     // ===================== Create JSON Data =====================
-    StaticJsonDocument<200> doc;
+    StaticJsonDocument<256> doc;
+    doc["deviceID"] = device;
+    doc["timestamp"] = getCurrentFormattedTime();
     doc["temperature"] = temperature;
-    doc["humidity"]    = humidity;
-    doc["CO_ppm"]      = CO_ppm;
-    doc["CH4_ppm"]     = CH4_ppm;
-    doc["motion"]      = motion;
+    doc["humidity"] = humidity;
+    doc["motion"] = (motion > 0) ? true : false;
+    doc["CO"] = CO;
+    doc["CH4"] = CH4;
     
     String jsonData;
     serializeJson(doc, jsonData);
     
     // ===================== Save Data to SD Card =====================
     String currentTime = getCurrentFormattedTime();
-    String fileName = String(DATA_FOLDER) + "/NODE_" + String(deviceID) + "__" + currentTime + ".json";
+    String fileName = String(DATA_FOLDER) + "/ROOM_" + String(deviceID) + "__" + currentTime + ".json";
     
     File dataFile = SD.open(fileName.c_str(), FILE_WRITE);
     if (dataFile) {
